@@ -13,7 +13,11 @@ from modules.ml_models import calculate_ml_prediction
 from modules.kpi_metrics import calculate_portfolio_kpis
 
 # Initialisation du système de cache SQLite pour yfinance, qui intercepte automatiquement toutes les requêtes HTTP (Requests).
-requests_cache.install_cache('portfolio_yf_cache', expire_after=3600)
+# Adapté pour Streamlit Cloud (utilisation de tempfile pour éviter les problèmes de droits d'écriture et de lock SQLite).
+import tempfile
+import os
+cache_path = os.path.join(tempfile.gettempdir(), 'portfolio_yf_cache')
+requests_cache.install_cache(cache_path, expire_after=3600)
 
 
 try:

@@ -6,3 +6,5 @@ plotly
 scikit-learn
 financedatabase
 taipy
+requests-cache
+xgboost
