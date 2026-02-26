@@ -92,7 +92,7 @@ def calculate_ml_prediction(data_tuple, days_ahead=30):
         print(f"Erreur calculate_ml_prediction (XGBoost): {e}")
         return None, None
 
-@st.cache_data(persist="disk")
+@st.cache_data(show_spinner=False)
 def calculate_smart_prediction(prices_tuple, days_ahead=30):
     prices = list(prices_tuple)
     if not prices or len(prices) < 20:

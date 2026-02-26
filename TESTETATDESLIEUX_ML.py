@@ -335,7 +335,7 @@ def add_technical_indicators(df):
     return df
 
 # calculate_ml_prediction est maintenant géré dynamiquement par XGBoost via modules/ml_models.py
-@st.cache_data(persist="disk")
+@st.cache_data(show_spinner=False)
 def calculate_smart_prediction(prices_tuple, days_ahead=30):
     """
     Calcule une projection de prix future via une régression polynomiale (degré 2)
@@ -698,14 +698,14 @@ def load_data_from_gsheet(url, saved_tickers_json="{}"):
 
 # Titre avec span pour éviter que l'emoji ne soit affecté par le dégradé de texte transparent
 st.markdown("# Portefeuille • État des Lieux 💰", unsafe_allow_html=True)
-st.caption(f"Dernière actualisation : {time.strftime('%H:%M:%S')}")
+st.caption(f"Dernière actualisation : {pd.Timestamp.now(tz='Europe/Paris').strftime('%H:%M:%S')}")
 
 # --- BARRE LATÉRALE (SIDEBAR) ---
 with st.sidebar:
     st.header("Importation du portefeuille")
     
     # Sélecteur de source
-    source_mode = st.radio("Source des données", ["Fichier CSV", "Google Sheet (Public)"], label_visibility="collapsed")
+    source_mode = st.radio("Source des données", ["Google Sheet (Public)", "Fichier CSV"], label_visibility="collapsed")
     
     uploaded_file = None
     gsheet_url = None
@@ -721,10 +721,12 @@ with st.sidebar:
         # Tentative de récupération auto depuis secrets
         default_url = "https://docs.google.com/spreadsheets/d/1MtRBv8XF-i6d43XqMLtyLIDWfZp8fPomWUBRzf5sfqQ/edit?usp=sharing"
         try:
-            default_url = st.secrets.get("public_gsheet_url", "")
+            secret_url = st.secrets.get("public_gsheet_url", "")
+            if secret_url:
+                default_url = secret_url
         except Exception:
             pass
-        gsheet_url = st.text_input("URL Google Sheet", value=default_url, placeholder="https://docs.google.com/spreadsheets/d/1MtRBv8XF-i6d43XqMLtyLIDWfZp8fPomWUBRzf5sfqQ/edit?usp=sharing")
+        gsheet_url = st.text_input("URL Google Sheet", value=default_url, placeholder="https://docs.google.com/.../edit?usp=sharing")
         if gsheet_url:
             st.caption("✅ URL détectée")
     
