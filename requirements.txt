@@ -8,3 +8,4 @@ financedatabase
 taipy
 requests-cache
 xgboost
+streamlit-autorefresh

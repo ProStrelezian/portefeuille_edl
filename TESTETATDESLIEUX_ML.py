@@ -2096,48 +2096,20 @@ if df is not None:
                             st.warning("Aucun résultat trouvé.")
 
     # --- LOGIQUE DE RAFRAÎCHISSEMENT AUTOMATIQUE ---
-    # On utilise un timestamp dans le session state pour éviter time.sleep() qui bloque
-    # le thread principal du serveur Streamlit pour tous les utilisateurs.
+    # Utilisation du composant natif streamlit_autorefresh pour éviter que time.sleep() ne bloque
+    # le thread principal du serveur Streamlit Cloud.
     if auto_refresh:
-        now = time.time()
-
-        # Initialisation du timestamp au premier passage
-        if "last_refresh_time" not in st.session_state:
-            st.session_state.last_refresh_time = now
-
-        elapsed = now - st.session_state.last_refresh_time
-        remaining = max(0, int(refresh_interval - elapsed))
-
-        # Compte à rebours JS (purement visuel, côté navigateur)
-        countdown_container_id = f"countdown-container-{int(st.session_state.last_refresh_time)}"
-        js_script = f"""
-        <div id="{countdown_container_id}" style="font-size: 0.875rem; color: #8ba0b2; font-family: 'Overpass', sans-serif;"></div>
-        <script>
-            var seconds = {remaining};
-            var countdownElement = document.getElementById("{countdown_container_id}");
-            function tick() {{
-                if (countdownElement) {{
-                    countdownElement.innerHTML = "⏳ Rafraîchissement dans " + seconds + "s";
-                    seconds--;
-                    if (seconds >= 0) {{
-                        setTimeout(tick, 1000);
-                    }}
-                }}
-            }}
-            tick();
-        </script>
-        """
-        countdown_placeholder.markdown(js_script, unsafe_allow_html=True)
-
-        # Si l'intervalle est écoulé, on vide le cache et on relance
-        if elapsed >= refresh_interval:
-            st.session_state.last_refresh_time = now
-            st.cache_data.clear()
-            st.rerun()
-        else:
-            # Rerun léger dans ~1s pour mettre à jour le compteur sans time.sleep()
-            time.sleep(1)
-            st.rerun()
+        try:
+            from streamlit_autorefresh import st_autorefresh
+            # L'intervalle est en millisecondes. On le passe à st_autorefresh.
+            # Cela va déclencher un st.rerun() automatiquement depuis le navigateur (frontend)
+            # sans bloquer le backend avec time.sleep().
+            st_autorefresh(interval=refresh_interval * 1000, key="data_autorefresh")
+            
+            # Affichage purement visuel d'un message 
+            st.caption(f"Le tableau de bord s'actualise automatiquement toutes les {refresh_interval} secondes.")
+        except ImportError:
+            st.error("Le module `streamlit-autorefresh` n'est pas installé. Veuillez l'ajouter au fichier `requirements.txt` (pip install streamlit-autorefresh).")
 
 if __name__ == "__main__":
-    print("Lancez via : streamlit run portfolio_app.py")
+    print("Lancez via : streamlit run TESTETATDESLIEUX_ML.py")
