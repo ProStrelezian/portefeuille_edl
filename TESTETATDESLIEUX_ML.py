@@ -256,30 +256,6 @@ def is_ticker_usd_heuristic(ticker):
         return True
     return False
 
-def create_features(df, window_sizes=[5, 10, 20]):
-    """
-    Crée des features (variables) pour le modèle ML à partir d'un historique de prix.
-    - Moyennes mobiles, écarts-types, et valeurs décalées (lags).
-    """
-    df_features = df.copy()
-    df_features.columns = ['price'] # S'assurer que la colonne s'appelle 'price'
-    
-    # Time index pour capturer la tendance
-    df_features['time_idx'] = range(len(df_features))
-    
-    # Lag features (prix des jours précédents)
-    for lag in range(1, 4):
-        df_features[f'lag_{lag}'] = df_features['price'].shift(lag)
-        
-    # Moving averages
-    for window in window_sizes:
-        df_features[f'ma_{window}'] = df_features['price'].rolling(window=window).mean()
-        
-    # Rolling std dev (volatilité)
-    for window in window_sizes:
-        df_features[f'std_{window}'] = df_features['price'].rolling(window=window).std()
-        
-    return df_features
 
 def add_technical_indicators(df):
     """Calcule les indicateurs techniques une seule fois pour le cache."""
@@ -662,13 +638,20 @@ def process_portfolio_data(df, saved_tickers=None):
         st.error(f"Erreur traitement données : {e}")
         return None
 
-def load_data(file_input, saved_tickers=None):
-    """Charge les données depuis un fichier CSV ou une chaîne."""
+def load_data(file_input, saved_tickers=None, file_type="csv"):
+    """Charge les données depuis un fichier CSV, Excel, JSON ou une chaîne."""
     try:
-        df = pd.read_csv(file_input)
+        if file_type == "csv":
+            df = pd.read_csv(file_input)
+        elif file_type == "excel":
+            df = pd.read_excel(file_input)
+        elif file_type == "json":
+            df = pd.read_json(file_input)
+        else:
+            return None
         return process_portfolio_data(df, saved_tickers)
     except Exception as e:
-        st.error(f"Erreur lecture CSV : {e}")
+        st.error(f"Erreur lecture {file_type.upper()} : {e}")
         return None
 
 @st.cache_data(ttl=600)
@@ -705,8 +688,29 @@ with st.sidebar:
     st.header("Importation du portefeuille")
     
     # Sélecteur de source
-    source_mode = st.radio("Source des données", ["Google Sheet (Public)", "Fichier CSV"], label_visibility="collapsed")
+    source_mode = st.radio("Source des données", ["Google Sheet (Public)", "Fichier CSV", "Fichier Excel", "Fichier JSON"], label_visibility="collapsed")
     
+    with st.expander("📝 Guide d'importation (Colonnes requises)"):
+        st.markdown("""
+        Pour que l'application lise correctement vos données, votre fichier (ou Google Sheet) **doit** contenir ces colonnes (respectez les majuscules/minuscules) :
+        - `Nom de l'actif` : Nom de l'action/crypto (ex: Apple (AAPL))
+        - `Valeur d'une unité` : Prix d'achat (ex: 150.50 €)
+        - `Unités` : Quantité achetée (ex: 2.5)
+        - `Date d'obtention` : Format JJ/MM/AAAA
+        
+        **Colonnes optionnelles recommandées :**
+        - `Total de l'actif` : Montant total investi
+        - `Type d'actif` : ETF, Action, Cryptomonnaie...
+        - `Frais` : Frais de transaction
+        - `Date de vente` / `Prix de vente` : Pour les actifs vendus
+        
+        **💡 Vous venez de Revolut ou d'un autre courtier ?**
+        1. Exportez votre relevé d'investissement
+        2. Renommez simplement l'en-tête de la colonne des tickers/noms en `Nom de l'actif` (et ajoutez le ticker entre parenthèses)
+        3. Renommez la colonne Prix en `Valeur d'une unité`
+        4. Renommez la colonne Quantité en `Unités`
+        """)
+
     uploaded_file = None
     gsheet_url = None
 
@@ -715,8 +719,20 @@ with st.sidebar:
         if uploaded_file is None:
             st.info("Utilisation des données 'Placeholder' par défaut.")
         else:
-            st.success("Fichier chargé !")
-    else:
+            st.success("Fichier CSV chargé !")
+    elif source_mode == "Fichier Excel":
+        uploaded_file = st.file_uploader("Chargez votre portefeuille en format Excel", type=["xlsx", "xls"])
+        if uploaded_file is None:
+            st.info("Utilisation des données 'Placeholder' par défaut.")
+        else:
+            st.success("Fichier Excel chargé !")
+    elif source_mode == "Fichier JSON":
+        uploaded_file = st.file_uploader("Chargez votre portefeuille en format JSON", type=["json"])
+        if uploaded_file is None:
+            st.info("Utilisation des données 'Placeholder' par défaut.")
+        else:
+            st.success("Fichier JSON chargé !")
+    elif source_mode == "Google Sheet (Public)":
         st.markdown("Collez le lien de votre Google Sheet (Accès 'Tous les utilisateurs disposant du lien').")
         # Tentative de récupération auto depuis secrets
         default_url = "https://docs.google.com/spreadsheets/d/1MtRBv8XF-i6d43XqMLtyLIDWfZp8fPomWUBRzf5sfqQ/edit?usp=sharing"
@@ -764,13 +780,6 @@ with st.sidebar:
     # Placeholder for the countdown timer, will be populated by the refresh logic
     countdown_placeholder = st.empty()
 
-    st.markdown("---")
-    # Section d'aide pour l'utilisateur.
-    st.markdown("""
-    **Légende :**
-    - **Projection à 30 jours** : Projection mathématique (courbe de tendance).
-    - **Avis** : Consensus analystes (Yahoo). Actions uniquement
-    """)
 
 # --- CHARGEMENT ET PRÉPARATION DES DONNÉES ---
 df = None
@@ -781,10 +790,15 @@ if source_mode == "Google Sheet (Public)" and gsheet_url:
         if df is None:
             st.error("Erreur : Impossible de lire le Google Sheet. Vérifiez qu'il est public (Lecture seule).")
 elif uploaded_file is not None:
-    df = load_data(uploaded_file, st.session_state.saved_tickers)
+    if source_mode == "Fichier CSV":
+        df = load_data(uploaded_file, st.session_state.saved_tickers, "csv")
+    elif source_mode == "Fichier Excel":
+        df = load_data(uploaded_file, st.session_state.saved_tickers, "excel")
+    elif source_mode == "Fichier JSON":
+        df = load_data(uploaded_file, st.session_state.saved_tickers, "json")
 
 if df is None:
-    df = load_data(StringIO(DEFAULT_PORTFOLIO_CSV), st.session_state.saved_tickers)
+    df = load_data(StringIO(DEFAULT_PORTFOLIO_CSV), st.session_state.saved_tickers, "csv")
 
 if df is not None:
     is_sold = (df["Date de vente"].notna()) | (df["Prix de vente"] > 0)
@@ -1051,7 +1065,9 @@ if df is not None:
         df_hold = pd.concat([df_hold, df_enriched], axis=1)
 
         # Conversion explicite en numérique pour gérer les None (qui deviennent NaN)
-        cols_tech = ['MM 200', 'MME 9', 'MME 21', 'MACD', 'ATR', 'BB Haut', 'BB Bas', 'Stoch K']
+        cols_tech = ['MM 200', 'MME 9', 'MME 21', 'MACD', 'ATR', 'BB Haut', 'BB Bas', 'Stoch K', 
+                     'Proj. 30j (%)', 'Proj. 7j (%)', 'Proj. 30j Bas', 'Proj. 30j Haut', 
+                     'Proj. 7j Bas', 'Proj. 7j Haut', 'Proj. 30j (ML)', 'Proj. 7j (ML)']
         for col in cols_tech:
             df_hold[col] = pd.to_numeric(df_hold[col], errors='coerce')
         
@@ -1318,23 +1334,38 @@ if df is not None:
             if "🔴" in val_str: return 'color: #ff4b4b; font-weight: bold;'
             return ''
             
-        with st.expander("ℹ️ Comment analyser ce tableau ?", expanded=False):
+        with st.expander("ℹ️ Guide de lecture des indicateurs et prédictions", expanded=False):
             st.markdown("""
-            **1. Position & Performance**
-            *   **Evol. Jour %** : Variation par rapport à la veille. Utile pour suivre l'humeur immédiate du marché.
-            *   **Performance %** : Votre gain ou perte total depuis l'achat (incluant dividendes/staking, qui agissent comme un bonus fluctuant réduisant les pertes).
+            ### 📈 1. Performances Actuelles
+            *   **Evol. Jour %** : Variation du prix depuis hier. Permet de capter l'humeur immédiate du marché.
+            *   **Performance %** : Votre rentabilité globale depuis l'achat (prend en compte les dividendes ou le staking accumulés).
             
-            **2. Indicateurs Techniques (La "Météo" du marché)**
-            *   **Signal** : Combine MME (Tendance) et Bollinger (Extrêmes). "Sursell" = Prix anormalement bas (Opportunité ?).
-            *   **ATR (Volatilité)** : Indique la nervosité de l'actif. Un chiffre élevé = gros mouvements de prix (risque plus élevé).
-            *   **MACD** : Indicateur d'élan. Positif = Poussée haussière. Négatif = Poussée baissière.
-            *   **MM 200** : La "Juge de Paix". Si le prix est au-dessus, la tendance de fond (long terme) est saine.
-            *   **Bandes Bollinger** : Canaux de volatilité. Si le prix touche le haut, risque de correction. Si bas, rebond possible.
-            *   **Stoch %K** : Oscillateur (0-100). >80 = Surchauffe (Vente?), <20 = Survendu (Achat?).
+            ---
             
-            **3. Prédictions : 🤖 IA (XGBoost) vs 📐 Polynomiale**
-            *   **🤖 (ML XGBoost)** : Un modèle de machine learning entraîné sur les indicateurs techniques (RSI, MACD, Volume, ATR…). Il détecte des patterns non-linéaires et est souvent plus fiable pour anticiper les retournements de tendance. **Colonne "7j/30j 🤖 %".**
-            *   **📐 (Poly)** : Une **régression polynomiale de degré 2** (mathématique pure, pas d'IA). Elle prolonge simplement la courbe de tendance actuelle. Utile uniquement si la tendance est stable et régulière. **Colonne "7j/30j 📐 %".** ⚠️ *Ne pas confondre avec une prédiction ML.*
+            ### 🧠 2. La Météo Technique (Indicateurs)
+            *Ces indicateurs mathématiques aident à comprendre la dynamique actuelle de l'actif.*
+            
+            *   **Signal Principal** : Synthèse de la tendance. 
+                * *Achat/Vente (MME)* indique la dynamique court terme. 
+                * *Sursell/Surchauffe (BB)* indique un prix anormalement bas ou haut par rapport à sa moyenne.
+            *   **MM 200 (Juge de Paix)** : Si le prix actuel est > MM 200, la tendance de fond à long terme est positive (Haussière).
+            *   **MACD (L'Élan)** : Mesure la force du mouvement. S'il est positif et grandit, l'élan acheteur est fort. S'il est négatif, les vendeurs dominent.
+            *   **Stoch %K (Surachat / Survente)** : Varie de 0 à 100. 
+                * Proche de **100** : L'actif a beaucoup monté très vite (risque de correction).
+                * Proche de **0** : L'actif a beaucoup chuté très vite (potentiel de rebond).
+            *   **ATR (La Nervosité)** : Plus le chiffre est grand, plus l'actif est volatil et bouge fortement (à la hausse comme à la baisse).
+            *   **Bandes Bollinger (Haut/Bas)** : Définissent le "canal normal" dans lequel le prix évolue. Toucher la bande haute ou basse annonce souvent un rebond dans le sens inverse.
+            
+            ---
+            
+            ### 🔮 3. Les Prédictions (7 et 30 jours)
+            *L'application utilise deux approches différentes pour tenter de prédire l'avenir.*
+            
+            *   🤖 **L'Intelligence Artificielle (XGBoost)** : *L'approche intelligente.*  
+                Un modèle de Machine Learning entraîné à repérer des schémas historiques complexes en lisant tous les indicateurs ci-dessus. Il est généralement plus doué pour anticiper les retournements de situation.
+            
+            *   📐 **La Régression Polynomiale** : *L'approche purement mathématique.*  
+                Une formule qui se contente de prolonger la courbe de tendance actuelle. Elle est utile uniquement quand le marché est très calme et directionnel. **Attention, elle ne sait pas anticiper un krach ou un rebond soudain.**
             """)
 
         st.write("") # Espace ajouté
