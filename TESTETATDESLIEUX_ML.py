@@ -9,7 +9,7 @@ import yfinance as yf # API pour les données de marché
 import time
 import numpy as np # Nécessaire pour les calculs de prédiction
 import requests_cache
-from modules.ml_models import calculate_ml_prediction, calculate_smart_prediction, get_llm_analysis, stream_llm_response
+from modules.ml_models import calculate_ml_prediction, calculate_smart_prediction
 from modules.kpi_metrics import calculate_portfolio_kpis
 from modules.config import CUSTOM_CSS, DEFAULT_PORTFOLIO_CSV, TICKER_FIXES
 from modules.utils import clean_currency_series, extract_ticker, is_ticker_usd_heuristic
@@ -469,7 +469,7 @@ with st.sidebar:
     st.header("🧭 Navigation")
     app_page = st.radio(
         "Choisissez une section :",
-        ["📊 Tableau de Bord", "📈 Performance & Prévisions", "🧠 Analyse Technique & Risques", "💡 Signaux & Opportunités", "🤖 Assistant IA", "⚙️ Configuration & Archives"],
+        ["📊 Tableau de Bord", "📈 Performance & Prévisions", "🧠 Analyse Technique & Risques", "💡 Signaux & Opportunités", "⚙️ Configuration & Archives"],
         label_visibility="collapsed"
     )
 
@@ -498,12 +498,6 @@ with st.sidebar:
 
     # Placeholder for the countdown timer, will be populated by the refresh logic
     countdown_placeholder = st.empty()
-
-    st.markdown("---")
-    st.header("🤖 Clé API IA (Optionnel)")
-    api_key_input = st.text_input("Votre clé API (Gemini ou OpenAI)", type="password", value=st.session_state.get('api_key', ''), help="Si vous n'avez pas de fichier secrets.toml, entrez votre clé ici pour affiner les prédictions. Conservée uniquement pour la session en cours.")
-    if api_key_input:
-        st.session_state.api_key = api_key_input
 
 # --- CHARGEMENT ET PRÉPARATION DES DONNÉES ---
 df = None
@@ -1388,14 +1382,6 @@ if df is not None:
                     st.info("  \n".join(analysis_points))
                     
                 st.write("") # Espace
-                if st.button("🧠 Affiner les prédictions via l'IA (LLM)", key=f"llm_{ticker}", help="Demande à une IA (Gemini ou GPT-4o) de synthétiser ces signaux."):
-                    api_key = st.session_state.get('api_key', '')
-                    prompt_text = "\n".join(analysis_points)
-                    prompt = f"Agis comme un analyste quantitatif expert (Hedge Fund). Affine l'analyse pour l'actif {selected_asset} dont le prix actuel est {close_p:.2f}.\nVoici les signaux techniques détectés :\n{prompt_text}\nConsignes :\n1. Synthétise la situation\n2. Quelle est la zone de risque actuelle ?\n3. Paragraphe conclusif très analytique.\nMax 3 paragraphes concis."
-                    st.markdown("#### 🤖 Analyse Quantitative de l'IA")
-                    stream = stream_llm_response(prompt, user_api_key=api_key)
-                    st.write_stream(stream)
-                
                 # --- Bouton de téléchargement des données du graphique ---
                 csv_chart = df_chart.to_csv().encode('utf-8')
                 st.download_button(
@@ -1731,36 +1717,6 @@ if df is not None:
                         st.caption("Aucun facteur technique ou fondamental marquant.")
         else:
             st.info("Chargez un portefeuille pour voir les recommandations.")
-
-    elif app_page == "🤖 Assistant IA":
-        st.subheader("🤖 Assistant IA - Discutez avec votre portefeuille")
-        st.markdown("Posez des questions sur vos actifs, demandez une analyse globale, ou testez des scénarios.")
-        
-        if "chat_history" not in st.session_state:
-            st.session_state.chat_history = []
-            
-        for message in st.session_state.chat_history:
-            with st.chat_message(message["role"]):
-                st.markdown(message["content"])
-                
-        if prompt := st.chat_input("Ex: Lequel de mes actifs est le plus risqué en ce moment ?"):
-            st.session_state.chat_history.append({"role": "user", "content": prompt})
-            with st.chat_message("user"):
-                st.markdown(prompt)
-                
-            portfolio_ctx = "Portefeuille vide."
-            if not df_hold.empty:
-                cols = [c for c in ["Nom de l'actif", "Type d'actif", "Valeur Actuelle", "Plus-value Latente"] if c in df_hold.columns]
-                portfolio_ctx = df_hold[cols].to_string()
-                
-            full_prompt = f"Contexte de mon portefeuille :\n{portfolio_ctx}\n\nQuestion de l'utilisateur : {prompt}"
-                
-            with st.chat_message("assistant"):
-                api_key = st.session_state.get('api_key', '')
-                stream = stream_llm_response(full_prompt, user_api_key=api_key, history=st.session_state.chat_history[:-1])
-                response_text = st.write_stream(stream)
-                
-            st.session_state.chat_history.append({"role": "assistant", "content": response_text})
 
     elif app_page == "⚙️ Configuration & Archives":
         st.subheader("💸 Historique des Ventes")
