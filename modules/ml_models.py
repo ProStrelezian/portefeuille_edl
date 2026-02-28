@@ -125,3 +125,59 @@ def calculate_smart_prediction(prices_tuple, days_ahead=30):
     except Exception as e:
         print(f"Erreur calculate_smart_prediction (Polyfit): {e}")
         return None, None, None, None
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def get_llm_analysis(asset_name, current_price, analysis_points, user_api_key=""):
+    openai_key = ""
+    gemini_key = ""
+    
+    try:
+        openai_key = st.secrets.get("OPENAI_API_KEY", "")
+    except Exception:
+        pass
+        
+    try:
+        gemini_key = st.secrets.get("GEMINI_API_KEY", "")
+    except Exception:
+        pass
+        
+    if user_api_key and user_api_key.startswith("sk-"):
+        openai_key = user_api_key
+    elif user_api_key:
+        gemini_key = user_api_key
+    
+    if not openai_key and not gemini_key:
+        return "⚠️ Aucune clé API trouvée. Ajoutez une clé API dans le menu latéral (Optionnel) ou via un fichier `secrets.toml` pour activer l'IA."
+
+    prompt_text = "\n".join(analysis_points)
+    prompt = f"""
+Agis comme un analyste quantitatif expert (Hedge Fund). Affine l'analyse pour l'actif {asset_name} dont le prix actuel est {current_price:.2f}.
+Voici les signaux techniques détectés par mon algorithme :
+{prompt_text}
+
+Consignes :
+1. Synthétise la situation : Y a-t-il une convergence des signaux (ex: rebond technique + signal Achat IA, ou contradiction MME vs Bollinger) ?
+2. Quelle est la zone de risque actuelle selon ces données ?
+3. Donne un court paragraphe conclusif (très analytique, pro et froid). (Pas de conseils financiers directs, analyse des probabilités).
+Max 3 paragraphes concis.
+"""
+    try:
+        if openai_key:
+            from openai import OpenAI
+            client = OpenAI(api_key=openai_key)
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=600,
+                temperature=0.7
+            )
+            return response.choices[0].message.content
+        elif gemini_key:
+            import google.generativeai as genai
+            genai.configure(api_key=gemini_key)
+            # gemini-1.5-pro pour les requêtes asynchrones/complexes ou 1.5-flash
+            model = genai.GenerativeModel('gemini-1.5-pro')
+            response = model.generate_content(prompt)
+            return response.text
+    except Exception as e:
+        return f"Erreur lors de la génération IA: {e}"

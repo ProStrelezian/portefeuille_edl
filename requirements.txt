@@ -9,4 +9,8 @@ taipy
 requests-cache
 xgboost
 streamlit-autorefresh
-openpyxl
+<<<<<<< HEAD
+openai
+google-generativeai
+=======
+>>>>>>> parent of fd1f20a (0.0.5 - Amélioration de l'importation + Correction mineur)
