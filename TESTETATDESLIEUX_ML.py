@@ -9,7 +9,7 @@ import yfinance as yf # API pour les données de marché
 import time
 import numpy as np # Nécessaire pour les calculs de prédiction
 import requests_cache
-from modules.ml_models import calculate_ml_prediction, get_llm_analysis
+from modules.ml_models import calculate_ml_prediction, calculate_smart_prediction, get_llm_analysis
 from modules.kpi_metrics import calculate_portfolio_kpis
 
 # Initialisation du système de cache SQLite pour yfinance, qui intercepte automatiquement toutes les requêtes HTTP (Requests).
@@ -204,19 +204,14 @@ TICKER_FIXES = {
 } 
 
 # --- FONCTIONS UTILITAIRES ---
-def clean_currency(value):
-    """Nettoie les montants (ex: '1 234,56 €' -> 1234.56)."""
-    if pd.isna(value) or value == '':
-        return 0.0
-    if isinstance(value, (int, float)):
-        return float(value)
+def clean_currency_series(series):
+    """Version vectorisée de clean_currency pour un gain de performance massif."""
+    if pd.api.types.is_numeric_dtype(series):
+        return series.fillna(0.0)
     
     # Gère les espaces, symboles monétaires, et la virgule comme séparateur décimal.
-    cleaned = str(value).replace('€', '').replace(' ', '').replace('\u202f', '').replace(',', '.')
-    try:
-        return float(cleaned)
-    except ValueError:
-        return 0.0
+    cleaned = series.astype(str).str.replace(r'[€ \u202f]', '', regex=True).str.replace(',', '.')
+    return pd.to_numeric(cleaned, errors='coerce').fillna(0.0)
 
 def extract_ticker(name, saved_tickers=None):
     """
@@ -255,31 +250,6 @@ def is_ticker_usd_heuristic(ticker):
     if "-" not in ticker and "." not in ticker:
         return True
     return False
-
-def create_features(df, window_sizes=[5, 10, 20]):
-    """
-    Crée des features (variables) pour le modèle ML à partir d'un historique de prix.
-    - Moyennes mobiles, écarts-types, et valeurs décalées (lags).
-    """
-    df_features = df.copy()
-    df_features.columns = ['price'] # S'assurer que la colonne s'appelle 'price'
-    
-    # Time index pour capturer la tendance
-    df_features['time_idx'] = range(len(df_features))
-    
-    # Lag features (prix des jours précédents)
-    for lag in range(1, 4):
-        df_features[f'lag_{lag}'] = df_features['price'].shift(lag)
-        
-    # Moving averages
-    for window in window_sizes:
-        df_features[f'ma_{window}'] = df_features['price'].rolling(window=window).mean()
-        
-    # Rolling std dev (volatilité)
-    for window in window_sizes:
-        df_features[f'std_{window}'] = df_features['price'].rolling(window=window).std()
-        
-    return df_features
 
 def add_technical_indicators(df):
     """Calcule les indicateurs techniques une seule fois pour le cache."""
@@ -333,55 +303,6 @@ def add_technical_indicators(df):
     df['BB_Lower'] = sma20 - (std20 * 2)
         
     return df
-
-# calculate_ml_prediction est maintenant géré dynamiquement par XGBoost via modules/ml_models.py
-@st.cache_data(show_spinner=False)
-def calculate_smart_prediction(prices_tuple, days_ahead=30):
-    """
-    Calcule une projection de prix future via une régression polynomiale (degré 2)
-    et estime une fourchette haute/basse basée sur la volatilité historique.
-    Retourne le prix projeté, la variation en %, et la fourchette basse/haute.
-    La fonction est mise en cache pour la performance.
-    """
-    prices = list(prices_tuple)
-    if not prices or len(prices) < 20:
-        return None, None, None, None
-    
-    try:
-        y = np.array(prices)
-        x = np.arange(len(y))
-        
-        # Régression polynomiale pour la tendance centrale
-        coeffs = np.polyfit(x, y, 2)
-        poly_func = np.poly1d(coeffs)
-        
-        # Prédiction du prix central
-        future_x = len(x) + days_ahead
-        future_price = poly_func(future_x)
-        
-        if future_price <= 0: future_price = 0.01
-        
-        # Calcul de l'écart-type des résidus (erreur du modèle sur l'historique)
-        residuals = y - poly_func(x)
-        std_dev_residuals = np.std(residuals)
-        
-        # Définition de la fourchette (ex: +/- 1.5 écarts-types)
-        prediction_range = std_dev_residuals * 1.5 
-
-        future_low = future_price - prediction_range
-        future_high = future_price + prediction_range
-
-        # S'assurer que la fourchette basse ne soit pas négative
-        if future_low <= 0: future_low = 0.01
-
-        # Calcul de la variation en % par rapport au prix actuel
-        current_price = prices[-1]
-        pct_change = ((future_price - current_price) / current_price) * 100
-        
-        return future_price, pct_change, future_low, future_high
-    except Exception:
-        # En cas d'erreur de calcul (données insuffisantes, etc.)
-        return None, None, None, None
 
 @st.cache_data(show_spinner=False, ttl=86400)
 def search_ticker_in_db(query, category):
@@ -649,7 +570,7 @@ def process_portfolio_data(df, saved_tickers=None):
         money_cols = ["Valeur d'une unité", "Total de l'actif", "Frais", "Gain de staking", "Dividende", "Prix de vente", "Unités"]
         for col in money_cols:
             if col in df.columns:
-                df[col] = df[col].apply(clean_currency)
+                df[col] = clean_currency_series(df[col])
         date_cols = ["Date d'obtention", "Date de vente"]
         # 'dayfirst=True' pour interpréter correctement le format JJ/MM/AAAA.
         for col in date_cols:
@@ -663,12 +584,28 @@ def process_portfolio_data(df, saved_tickers=None):
         return None
 
 def load_data(file_input, saved_tickers=None):
-    """Charge les données depuis un fichier CSV ou une chaîne."""
+    """Charge les données depuis un fichier CSV ou Excel ou une chaîne."""
     try:
-        df = pd.read_csv(file_input)
+        # Check if file_input is a string (StringIO) or an UploadedFile
+        if isinstance(file_input, str) or hasattr(file_input, 'getvalue') and isinstance(file_input.getvalue(), str):
+            df = pd.read_csv(file_input)
+        elif hasattr(file_input, 'name'):
+            # Detect file type by extension
+            file_name = file_input.name.lower()
+            if file_name.endswith('.csv'):
+                df = pd.read_csv(file_input)
+            elif file_name.endswith(('.xls', '.xlsx', '.ods')):
+                df = pd.read_excel(file_input)
+            else:
+                st.error("Format de fichier non supporté. Veuillez utiliser CSV, XLS, XLSX ou ODS.")
+                return None
+        else:
+            # Fallback for StringIO
+            df = pd.read_csv(file_input)
+        
         return process_portfolio_data(df, saved_tickers)
     except Exception as e:
-        st.error(f"Erreur lecture CSV : {e}")
+        st.error(f"Erreur lecture fichier : {e}")
         return None
 
 @st.cache_data(ttl=600)
@@ -705,13 +642,13 @@ with st.sidebar:
     st.header("Importation du portefeuille")
     
     # Sélecteur de source
-    source_mode = st.radio("Source des données", ["Google Sheet (Public)", "Fichier CSV"], label_visibility="collapsed")
+    source_mode = st.radio("Source des données", ["Google Sheet (Public)", "Fichier Local (CSV/Excel)"], label_visibility="collapsed")
     
     uploaded_file = None
-    gsheet_url = None
-
-    if source_mode == "Fichier CSV":
-        uploaded_file = st.file_uploader("Chargez votre portefeuille en format CSV", type=["csv"])
+    gsheet_url = ""
+    if source_mode == "Fichier Local (CSV/Excel)":
+        uploaded_file = st.file_uploader("📂 Chargez votre fichier (CSV ou Excel)", type=["csv", "xls", "xlsx", "ods"])
+        st.caption("Le fichier doit contenir au moins: `Nom de l'actif`, `Unités`, `Valeur d'une unité`, `Total de l'actif`.")
         if uploaded_file is None:
             st.info("Utilisation des données 'Placeholder' par défaut.")
         else:
@@ -765,15 +702,12 @@ with st.sidebar:
     countdown_placeholder = st.empty()
 
     st.markdown("---")
-<<<<<<< HEAD
     st.header("🤖 Clé API IA (Optionnel)")
     api_key_input = st.text_input("Votre clé API (Gemini ou OpenAI)", type="password", value=st.session_state.get('api_key', ''), help="Si vous n'avez pas de fichier secrets.toml, entrez votre clé ici pour affiner les prédictions. Conservée uniquement pour la session en cours.")
     if api_key_input:
         st.session_state.api_key = api_key_input
 
     st.markdown("---")
-=======
->>>>>>> parent of fd1f20a (0.0.5 - Amélioration de l'importation + Correction mineur)
     # Section d'aide pour l'utilisateur.
     st.markdown("""
     **Légende :**
@@ -929,7 +863,7 @@ if df is not None:
 
         def get_trend_7j(ticker):
             # Tendance exacte sur les 7 derniers jours calendaires
-            if daily_history_df.empty or ticker not in daily_history_df.columns:
+            if daily_history_df is None or daily_history_df.empty or ticker not in daily_history_df.columns:
                 return []
             series = daily_history_df[ticker].dropna()
             if series.empty:
@@ -941,7 +875,7 @@ if df is not None:
         def get_ml_prediction_display(ticker):
             df_t = full_ticker_data.get(ticker, pd.DataFrame())
             required_cols = ['Close', 'High', 'Low', 'Volume']
-            if df_t.empty or not all(c in df_t.columns for c in required_cols):
+            if df_t is None or df_t.empty or not all(c in df_t.columns for c in required_cols):
                 return (None, None)
             # Création d'un tuple hashable pour la mise en cache
             data_tuple = tuple(df_t[required_cols].itertuples(index=False, name=None))
@@ -954,11 +888,11 @@ if df is not None:
             
             # --- FIX ROBUSTESSE CACHE ---
             # Si les nouvelles colonnes (BB, Stoch) sont absentes à cause d'un cache obsolète, on recalcule.
-            if not df_t.empty and ('BB_Upper' not in df_t.columns or 'Stoch_K' not in df_t.columns):
+            if df_t is not None and not df_t.empty and ('BB_Upper' not in df_t.columns or 'Stoch_K' not in df_t.columns):
                 df_t = add_technical_indicators(df_t)
                 full_ticker_data[ticker] = df_t
             
-            if df_t.empty or 'MM_200' not in df_t.columns:
+            if df_t is None or df_t.empty or 'MM_200' not in df_t.columns:
                 return (None, None, None, None, None, None, None, None)
             
             last_row = df_t.iloc[-1]
@@ -977,7 +911,7 @@ if df is not None:
         # On parcourt df_hold une seule fois pour calculer toutes les colonnes dérivées,
         # au lieu de faire 10+ .apply() successifs qui repassent chaque fois sur tout le DataFrame.
         enriched_rows = []
-        for _, row in df_hold.iterrows():
+        for row in df_hold.to_dict('records'):
             ticker = row['Ticker']
             asset_name = row["Nom de l'actif"]
             devise = get_row_currency(asset_name, ticker)
@@ -1158,7 +1092,7 @@ if df is not None:
 
                     port_series = pd.Series(0.0, index=df_work.index)
                     
-                    for _, row in df_hold.iterrows():
+                    for row in df_hold.to_dict('records'):
                         t = row['Ticker']
                         if t in df_work.columns:
                             data_t = df_work[t]
@@ -1801,7 +1735,7 @@ if df is not None:
                         display_vol.style.format("{:.2f}%", subset=display_vol.columns[4:])
                                          .format("{:+.2f}", subset=["Evol. Hebdo (pts)"])
                                          .background_gradient(cmap='Reds', axis=None, subset=display_vol.columns[4:])
-                                         .applymap(lambda x: 'color: #ff4b4b' if x > 0 else 'color: #2ecc71', subset=["Evol. Hebdo (pts)"]),
+                                         .map(lambda x: 'color: #ff4b4b' if x > 0 else 'color: #2ecc71', subset=["Evol. Hebdo (pts)"]),
                         width='stretch',
                         height=400
                     )
