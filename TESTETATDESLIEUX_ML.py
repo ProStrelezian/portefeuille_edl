@@ -9,8 +9,10 @@ import yfinance as yf # API pour les données de marché
 import time
 import numpy as np # Nécessaire pour les calculs de prédiction
 import requests_cache
-from modules.ml_models import calculate_ml_prediction, calculate_smart_prediction, get_llm_analysis
+from modules.ml_models import calculate_ml_prediction, calculate_smart_prediction, get_llm_analysis, stream_llm_response
 from modules.kpi_metrics import calculate_portfolio_kpis
+from modules.config import CUSTOM_CSS, DEFAULT_PORTFOLIO_CSV, TICKER_FIXES
+from modules.utils import clean_currency_series, extract_ticker, is_ticker_usd_heuristic
 
 # Initialisation du système de cache SQLite pour yfinance, qui intercepte automatiquement toutes les requêtes HTTP (Requests).
 # Adapté pour Streamlit Cloud (utilisation de tempfile pour éviter les problèmes de droits d'écriture et de lock SQLite).
@@ -33,145 +35,7 @@ st.set_page_config(
 )
 
 # --- CUSTOM CSS FOR UI IMPROVEMENT ---
-st.markdown("""
-<style>
-    /* Import de la police Overpass (Style Anilist) */
-    @import url('https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;700;800&display=swap');
-
-    html, body, [class*="css"] {
-        font-family: 'Overpass', sans-serif;
-        color: #bcbedc; /* Couleur texte standard Anilist */
-        background-color: #0b1622; /* Fond sombre profond */
-    }
-    
-    /* Force le fond de l'application Streamlit */
-    .stApp {
-        background-color: #0b1622;
-    }
-
-    /* Titre principal */
-    h1 {
-        font-family: 'Overpass', sans-serif;
-        color: #edf1f5;
-        font-weight: 800 !important;
-        padding-bottom: 15px;
-        text-align: center;
-        margin-bottom: 30px;
-        text-shadow: 0 4px 12px rgba(0,0,0,0.3);
-    }
-
-    /* Titres de section (h2) */
-    h2 {
-        font-family: 'Overpass', sans-serif;
-        color: #edf1f5;
-        font-weight: 700;
-        margin-top: 2rem;
-        margin-bottom: 1rem;
-    }
-
-    /* Sous-titres */
-    h3 {
-        font-family: 'Overpass', sans-serif;
-        color: #edf1f5;
-        border-left: 5px solid #3db4f2; /* Bleu Anilist */
-        padding-left: 15px;
-        margin-top: 3rem;
-        margin-bottom: 1.5rem;
-        font-weight: 700;
-        background: linear-gradient(90deg, rgba(61, 180, 242, 0.1) 0%, transparent 100%);
-        padding-top: 10px;
-        padding-bottom: 10px;
-        border-radius: 0 4px 4px 0;
-    }
-    
-    /* Petits titres (h4) */
-    h4 {
-        font-family: 'Overpass', sans-serif;
-        color: #bcbedc;
-        font-weight: 600;
-        margin-top: 1.5rem;
-        margin-bottom: 0.5rem;
-    }
-
-    /* Cartes / Métriques (Style Anilist) */
-    div[data-testid="stMetric"] {
-        background-color: #151f2e;
-        border-radius: 4px;
-        padding: 15px;
-        box-shadow: 0 14px 30px rgba(0,0,0,.1), 0 4px 4px rgba(0,0,0,.04);
-        border: none;
-        text-align: center;
-        transition: transform 0.2s ease;
-        margin-top: 20px;
-    }
-    
-    div[data-testid="stMetric"]:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 20px 40px rgba(0,0,0,.2);
-    }
-
-    div[data-testid="stMetricLabel"] > div {
-        font-size: 0.85rem;
-        color: #8ba0b2;
-        font-weight: 600;
-        justify-content: center;
-        width: 100%;
-        white-space: normal;
-        text-align: center;
-        margin-bottom: 5px;
-    }
-    
-    div[data-testid="stMetricValue"] {
-        font-family: 'Overpass', sans-serif;
-        font-size: 1.4rem;  /* Plus petit pour éviter troncature */
-        font-weight: 700;
-        color: #3db4f2 !important; /* Bleu Anilist */
-        white-space: normal;
-    }
-
-    div[data-testid="stMetricDelta"] > div {
-        white-space: normal;
-        font-size: 0.9rem;
-    }
-
-    /* Style des boutons */
-    div.stButton > button {
-        background-color: #3db4f2;
-        color: white;
-        border: none;
-        border-radius: 3px;
-        font-weight: 700;
-        font-family: 'Overpass', sans-serif;
-        transition: all 0.2s ease;
-    }
-
-    div.stButton > button:hover {
-        background-color: #62c3f5;
-        color: white;
-        box-shadow: 0 2px 10px rgba(61, 180, 242, 0.4);
-    }
-
-    /* Onglets */
-    div[data-testid="stTabs"] button[role="tab"] {
-        color: #8ba0b2;
-        font-weight: 600;
-        font-family: 'Overpass', sans-serif;
-    }
-
-    div[data-testid="stTabs"] button[aria-selected="true"] {
-        color: #3db4f2;
-        border-bottom-color: #3db4f2 !important;
-    }
-    
-    /* Ajustements responsive */
-    @media (max-width: 768px) {
-        .block-container {
-            padding-top: 2rem !important;
-        }
-        h1 { font-size: 1.8rem !important; }
-    }
-</style>
-""", unsafe_allow_html=True)
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 # --- INITIALISATION DE LA MÉMOIRE (SESSION STATE) --- #
 # Le Session State de Streamlit permet de conserver des données entre les rechargements de la page.
@@ -181,75 +45,9 @@ if "saved_tickers" not in st.session_state:
 if "saved_currencies" not in st.session_state:
     st.session_state.saved_currencies = {}
 
-# --- DONNÉES INTÉGRÉES (PORTEFEUILLE PAR DÉFAUT) --- #
-# Ce CSV sert de données de secours si aucun fichier n'est importé par l'utilisateur.
-DEFAULT_PORTFOLIO_CSV = """Nom de l'actif,Type d'actif,Valeur d'une unité,Unités,Gain de staking,Dividende,Date d'obtention,Frais,Total de l'actif,Date de vente,Prix de vente
-NEAR Protocol (NEAR-EUR),Cryptomonnaie,"2,07 €","23,158471","0,21498651",,05/09/2025 08:57,"1,99 €","48,46 €",,
-Argent (XAGUSD),CFD,"35,34 €","1,669436",,,05/09/2025 12:04,"1,00 €","59,00 €",28/11/2025 15:38,"77,31€"
-SPDR STOXX Europe 600 SRI UCITS ETF EUR Unhedged (Acc) (ZPDX),ETF,"32,67 €","1,224552",,,05/09/2025 12:18,"0,00 €","40,01 €",,
-Amundi PEA MSCI Emerging Asia ESG Leaders UCITS ETF - EUR (C/D) (18MB),ETF,"28,35 €","3,492063",,,11/09/2025 17:49,"1,00 €","99,00 €",,
-Amundi MSCI New Energy ESG Screened UCITS ETF (Dist) (LYM9),ETF,"29,09 €","5,122035",,"0,71 €",11/09/2025 17:42,"1,00 €","149,71 €",,
-Global X Uranium UCITS ETF AccumUSD (URNU),ETF,"24,73 €","8,046907",,,26/09/2025 10:04,"1,00 €","199,00 €",,
-"""
+# Configuration stockée dans modules/config.py
 
-# --- MAPPING MANUEL DE TICKERS --- #
-# Dictionnaire pour corriger les tickers mal extraits.
-# Exemple: si 'Mon Actif (MA)' extrait 'MA', on peut le corriger en 'MA.PA'
-TICKER_FIXES = {
-    'ZPDX': 'ZPDX.DE',
-    '18MB': 'PAASI.PA',
-    'LYM9': 'NRJ.PA',
-    'NEAR-EUR': 'NEAR-USD',
-    'URNU': 'URNU.L',
-} 
-
-# --- FONCTIONS UTILITAIRES ---
-def clean_currency_series(series):
-    """Version vectorisée de clean_currency pour un gain de performance massif."""
-    if pd.api.types.is_numeric_dtype(series):
-        return series.fillna(0.0)
-    
-    # Gère les espaces, symboles monétaires, et la virgule comme séparateur décimal.
-    cleaned = series.astype(str).str.replace(r'[€ \u202f]', '', regex=True).str.replace(',', '.')
-    return pd.to_numeric(cleaned, errors='coerce').fillna(0.0)
-
-def extract_ticker(name, saved_tickers=None):
-    """
-    Extrait un ticker potentiel depuis le nom de l'actif.
-    Priorité : 1) Session state (config manuelle), 2) TICKER_FIXES, 3) Détection automatique.
-    La logique parcourt les parenthèses de droite à gauche et prend le premier contenu
-    qui ne soit pas un terme générique (comme 'ACC', 'DIST', etc.).
-    Permet d'ignorer les mentions comme '(Acc)' pour trouver le vrai ticker comme '(ZPDX)'.
-    """
-    # Priorité 1 : configuration manuelle de l'utilisateur (session state)
-    if saved_tickers and name in saved_tickers:
-        return saved_tickers[name]
-
-    matches = re.findall(r'\((.*?)\)', name)
-    if matches:
-        for match in reversed(matches):
-            if match.upper() not in ['ACC', 'DIST', 'C/D', 'EUR', 'USD', 'HEDGED', 'UNHEDGED']:
-                raw_ticker = match
-                # Priorité 2 : corrections connues (TICKER_FIXES)
-                return TICKER_FIXES.get(raw_ticker, raw_ticker)
-        raw_ticker = matches[-1]
-        return TICKER_FIXES.get(raw_ticker, raw_ticker)
-    return None
-
-def is_ticker_usd_heuristic(ticker):
-    """
-    Devine si un ticker est probablement coté en USD.
-    - Vrai pour les cryptos (-USD), les taux de change (=X) ou les actions US (ex: 'AAPL').
-    - Faux pour les actions européennes (ex: '.PA', '.DE').
-    """
-    if not isinstance(ticker, str) or not ticker:
-        return False
-    ticker = ticker.upper()
-    if ticker.endswith("-USD") or ticker.endswith("=X"):
-        return True
-    if "-" not in ticker and "." not in ticker:
-        return True
-    return False
+# --- FONCTIONS UTILITAIRES DEPORTEES DANS modules/utils.py ---
 
 def add_technical_indicators(df):
     """Calcule les indicateurs techniques une seule fois pour le cache."""
@@ -671,7 +469,7 @@ with st.sidebar:
     st.header("🧭 Navigation")
     app_page = st.radio(
         "Choisissez une section :",
-        ["📊 Tableau de Bord", "📈 Performance & Prévisions", "🧠 Analyse Technique & Risques", "💡 Signaux & Opportunités", "⚙️ Configuration & Archives"],
+        ["📊 Tableau de Bord", "📈 Performance & Prévisions", "🧠 Analyse Technique & Risques", "💡 Signaux & Opportunités", "🤖 Assistant IA", "⚙️ Configuration & Archives"],
         label_visibility="collapsed"
     )
 
@@ -706,14 +504,6 @@ with st.sidebar:
     api_key_input = st.text_input("Votre clé API (Gemini ou OpenAI)", type="password", value=st.session_state.get('api_key', ''), help="Si vous n'avez pas de fichier secrets.toml, entrez votre clé ici pour affiner les prédictions. Conservée uniquement pour la session en cours.")
     if api_key_input:
         st.session_state.api_key = api_key_input
-
-    st.markdown("---")
-    # Section d'aide pour l'utilisateur.
-    st.markdown("""
-    **Légende :**
-    - **Projection à 30 jours** : Projection mathématique (courbe de tendance).
-    - **Avis** : Consensus analystes (Yahoo). Actions uniquement
-    """)
 
 # --- CHARGEMENT ET PRÉPARATION DES DONNÉES ---
 df = None
@@ -1599,11 +1389,12 @@ if df is not None:
                     
                 st.write("") # Espace
                 if st.button("🧠 Affiner les prédictions via l'IA (LLM)", key=f"llm_{ticker}", help="Demande à une IA (Gemini ou GPT-4o) de synthétiser ces signaux."):
-                    with st.spinner("L'IA analyse les signaux et les probabilités..."):
-                        api_key = st.session_state.get('api_key', '')
-                        llm_summary = get_llm_analysis(selected_asset, close_p, analysis_points, api_key)
-                        st.markdown("#### 🤖 Analyse Quantitative de l'IA")
-                        st.write(llm_summary)
+                    api_key = st.session_state.get('api_key', '')
+                    prompt_text = "\n".join(analysis_points)
+                    prompt = f"Agis comme un analyste quantitatif expert (Hedge Fund). Affine l'analyse pour l'actif {selected_asset} dont le prix actuel est {close_p:.2f}.\nVoici les signaux techniques détectés :\n{prompt_text}\nConsignes :\n1. Synthétise la situation\n2. Quelle est la zone de risque actuelle ?\n3. Paragraphe conclusif très analytique.\nMax 3 paragraphes concis."
+                    st.markdown("#### 🤖 Analyse Quantitative de l'IA")
+                    stream = stream_llm_response(prompt, user_api_key=api_key)
+                    st.write_stream(stream)
                 
                 # --- Bouton de téléchargement des données du graphique ---
                 csv_chart = df_chart.to_csv().encode('utf-8')
@@ -1940,6 +1731,36 @@ if df is not None:
                         st.caption("Aucun facteur technique ou fondamental marquant.")
         else:
             st.info("Chargez un portefeuille pour voir les recommandations.")
+
+    elif app_page == "🤖 Assistant IA":
+        st.subheader("🤖 Assistant IA - Discutez avec votre portefeuille")
+        st.markdown("Posez des questions sur vos actifs, demandez une analyse globale, ou testez des scénarios.")
+        
+        if "chat_history" not in st.session_state:
+            st.session_state.chat_history = []
+            
+        for message in st.session_state.chat_history:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+                
+        if prompt := st.chat_input("Ex: Lequel de mes actifs est le plus risqué en ce moment ?"):
+            st.session_state.chat_history.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+                
+            portfolio_ctx = "Portefeuille vide."
+            if not df_hold.empty:
+                cols = [c for c in ["Nom de l'actif", "Type d'actif", "Valeur Actuelle", "Plus-value Latente"] if c in df_hold.columns]
+                portfolio_ctx = df_hold[cols].to_string()
+                
+            full_prompt = f"Contexte de mon portefeuille :\n{portfolio_ctx}\n\nQuestion de l'utilisateur : {prompt}"
+                
+            with st.chat_message("assistant"):
+                api_key = st.session_state.get('api_key', '')
+                stream = stream_llm_response(full_prompt, user_api_key=api_key, history=st.session_state.chat_history[:-1])
+                response_text = st.write_stream(stream)
+                
+            st.session_state.chat_history.append({"role": "assistant", "content": response_text})
 
     elif app_page == "⚙️ Configuration & Archives":
         st.subheader("💸 Historique des Ventes")

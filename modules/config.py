@@ -11,8 +11,9 @@ Global X Uranium UCITS ETF AccumUSD (URNU),ETF,"24,73 €","8,046907",,,26/09/20
 
 TICKER_FIXES = {
     'ZPDX': 'ZPDX.DE',
-    '18MB': '18MB.PA',
-    'LYM9': 'LYM9.PA',
+    '18MB': 'PAASI.PA',
+    'LYM9': 'NRJ.PA',
+    'NEAR-EUR': 'NEAR-USD',
     'URNU': 'URNU.L',
 }
 

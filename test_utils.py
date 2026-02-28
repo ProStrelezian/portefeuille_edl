@@ -9,9 +9,13 @@ import os
 # Permet d'importer les fonctions depuis le fichier principal
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# On importe uniquement les fonctions pures (sans Streamlit)
-from TESTETATDESLIEUX_ML import clean_currency, extract_ticker, is_ticker_usd_heuristic, calculate_smart_prediction
+import pandas as pd
+from modules.utils import clean_currency_series, extract_ticker, is_ticker_usd_heuristic
+from modules.ml_models import calculate_smart_prediction
 
+def clean_currency(value):
+    s = pd.Series([value])
+    return clean_currency_series(s).iloc[0]
 
 # ──────────────────────────────────────────────
 # clean_currency
