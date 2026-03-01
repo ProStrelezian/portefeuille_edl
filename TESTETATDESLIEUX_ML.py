@@ -819,6 +819,7 @@ if df is not None:
 
     if app_page == "📊 Tableau de Bord":
         st.markdown("###  📊 Vue d'ensemble")
+        
         # Calcul des métriques globales du portefeuille.
         total_invested = df_hold["Total de l'actif"].sum()
         current_value_total = df_hold["Valeur Actuelle"].sum()
