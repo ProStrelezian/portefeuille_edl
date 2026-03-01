@@ -173,7 +173,7 @@ def fetch_historical_data(tickers):
         if not valid_tickers:
             return {}, pd.DataFrame(), pd.DataFrame()
 
-        tickers_to_fetch = list(set(valid_tickers + ["EURUSD=X"]))
+        tickers_to_fetch = list(set(valid_tickers + ["EURUSD=X", "EURGBP=X"]))
         
         try:
             # Helper avec réessai pour yfinance qui est souvent instable
@@ -247,7 +247,7 @@ def fetch_real_time_data(tickers):
     """Télécharge uniquement le dernier prix (très rapide)."""
     if not tickers: return pd.DataFrame()
     valid_tickers = [t for t in tickers if t and isinstance(t, str)]
-    tickers_to_fetch = list(set(valid_tickers + ["EURUSD=X"]))
+    tickers_to_fetch = list(set(valid_tickers + ["EURUSD=X", "EURGBP=X"]))
     
     try:
         # Essais multiples pour la robustesse du temps réel
@@ -266,7 +266,7 @@ def fetch_real_time_data(tickers):
 def fetch_market_data(tickers):
     """Orchestrateur : Combine historique (cache long) et temps réel (cache court)."""
     if not tickers:
-        return {}, {}, 1.0, {}, pd.DataFrame(), pd.DataFrame(), {}
+        return {}, {}, 1.0, 1.0, {}, pd.DataFrame(), pd.DataFrame(), {}
     
     # 1. Récupération des données
     full_ticker_data, data_intraday, data_daily_close = fetch_historical_data(tickers)
@@ -278,8 +278,9 @@ def fetch_market_data(tickers):
     reference_prices = {}
     history_data = {}
     eur_usd_rate = 1.0
+    eur_gbp_rate = 1.0
     
-    # 2. Extraction du taux EUR/USD (Live > Intraday > Daily)
+    # 2. Extraction du taux EUR/USD et EUR/GBP (Live > Intraday > Daily)
     rate_series = get_ticker_data(data_live, "EURUSD=X", 'Close')
     if rate_series.empty:
         rate_series = get_ticker_data(data_intraday, "EURUSD=X", 'Close')
@@ -289,6 +290,30 @@ def fetch_market_data(tickers):
             if not valid_rate.empty:
                 r = float(valid_rate.iloc[-1])
                 if r > 0: eur_usd_rate = r
+
+    rate_gbp_series = get_ticker_data(data_live, "EURGBP=X", 'Close')
+    if rate_gbp_series.empty:
+        rate_gbp_series = get_ticker_data(data_intraday, "EURGBP=X", 'Close')
+        
+    if not rate_gbp_series.empty:
+            valid_rate_gbp = rate_gbp_series.dropna()
+            if not valid_rate_gbp.empty:
+                r = float(valid_rate_gbp.iloc[-1])
+                if r > 0: eur_gbp_rate = r
+
+    ref_eur_usd_rate = eur_usd_rate
+    df_usd_hist = full_ticker_data.get("EURUSD=X", pd.DataFrame())
+    if not df_usd_hist.empty and len(df_usd_hist) > 1:
+        ref_eur_usd_rate = float(df_usd_hist['Close'].iloc[-2])
+    elif not df_usd_hist.empty:
+        ref_eur_usd_rate = float(df_usd_hist['Close'].iloc[-1])
+
+    ref_eur_gbp_rate = eur_gbp_rate
+    df_gbp_hist = full_ticker_data.get("EURGBP=X", pd.DataFrame())
+    if not df_gbp_hist.empty and len(df_gbp_hist) > 1:
+        ref_eur_gbp_rate = float(df_gbp_hist['Close'].iloc[-2])
+    elif not df_gbp_hist.empty:
+        ref_eur_gbp_rate = float(df_gbp_hist['Close'].iloc[-1])
 
     # 3. Construction des prix et références
     for ticker in valid_tickers:
@@ -321,7 +346,7 @@ def fetch_market_data(tickers):
             reference_prices[ticker] = 0.0
             history_data[ticker] = []
             
-    return current_prices, reference_prices, eur_usd_rate, history_data, data_intraday, data_daily_close, full_ticker_data
+    return current_prices, reference_prices, eur_usd_rate, eur_gbp_rate, ref_eur_usd_rate, ref_eur_gbp_rate, history_data, data_intraday, data_daily_close, full_ticker_data
 
 # --- CACHE 2: AVIS ANALYSTES (Long terme: 24h) ---
 @st.cache_data(ttl=86400)
@@ -496,6 +521,28 @@ with st.sidebar:
         refresh_interval = st.slider("Intervalle (sec)", 30, 300, 30, 30)
         st.caption(f"⚠️ Rechargement auto toutes les {refresh_interval}s.")
 
+    st.markdown("---")
+    st.header("💳 Fonds Revolut (Flexibles)")
+    
+    col_rev1, col_rev2 = st.columns(2)
+    with col_rev1:
+        st.markdown("**Déposé**")
+        rev_eur_dep = st.number_input("EUR (€) dépot", min_value=0.0, value=0.0, step=10.0)
+        rev_usd_dep = st.number_input("USD ($) dépot", min_value=0.0, value=0.0, step=10.0)
+        rev_gbp_dep = st.number_input("GBP (£) dépot", min_value=0.0, value=0.0, step=10.0)
+    with col_rev2:
+        st.markdown("**Intérêts (Net APY)**")
+        rev_eur_int = st.number_input("EUR (€) gain", min_value=0.0, value=0.0, step=0.1)
+        rev_usd_int = st.number_input("USD ($) gain", min_value=0.0, value=0.0, step=0.1)
+        rev_gbp_int = st.number_input("GBP (£) gain", min_value=0.0, value=0.0, step=0.1)
+        
+    with st.expander("ℹ️ Taux d'intérêts actuels (Revolut Standard)"):
+        st.markdown("*Ces taux d'intérêts s'appuient sur le fonds Fidelity Institutional Liquidity. En abonnement **Standard**, les frais de service maximums de Revolut sont appliqués (~0.90%), ce qui donne actuellement les **Annual Percentage Yield (APY)** Nets suivants :* \n\n"
+                    "- **EUR** : ~ **3,09 %** (Net APY)\n"
+                    "- **USD** : ~ **4,26 %** (Net APY)\n"
+                    "- **GBP** : ~ **3,98 %** (Net APY)\n"
+                    "\n*(L'APY représente le taux annuel global incluant la capitalisation quotidienne des intérêts. Ces taux fluctuent très légèrement chaque jour ouvré.)*")
+
     # Placeholder for the countdown timer, will be populated by the refresh logic
     countdown_placeholder = st.empty()
 
@@ -530,10 +577,10 @@ if df is not None:
         if unique_tickers:
             if not auto_refresh:
                 with st.spinner('Analyse des marchés en cours...'):
-                    market_prices, ref_prices, eur_usd_rate, history_data, raw_history_df, daily_history_df, full_ticker_data = fetch_market_data(unique_tickers)
+                    market_prices, ref_prices, eur_usd_rate, eur_gbp_rate, ref_eur_usd_rate, ref_eur_gbp_rate, history_data, raw_history_df, daily_history_df, full_ticker_data = fetch_market_data(unique_tickers)
                     asset_details = fetch_asset_details(unique_tickers)
             else:
-                market_prices, ref_prices, eur_usd_rate, history_data, raw_history_df, daily_history_df, full_ticker_data = fetch_market_data(unique_tickers)
+                market_prices, ref_prices, eur_usd_rate, eur_gbp_rate, ref_eur_usd_rate, ref_eur_gbp_rate, history_data, raw_history_df, daily_history_df, full_ticker_data = fetch_market_data(unique_tickers)
                 asset_details = fetch_asset_details(unique_tickers)
             
             # --- AJOUT: Alerte Jours Fériés / Week-end ---
@@ -557,13 +604,51 @@ if df is not None:
                     )
             # ---------------------------------------------
         else:
-            market_prices, ref_prices, eur_usd_rate, history_data, asset_details, raw_history_df, daily_history_df, full_ticker_data = {}, {}, 1.0, {}, {}, pd.DataFrame(), pd.DataFrame(), {}
+            market_prices, ref_prices, eur_usd_rate, eur_gbp_rate, ref_eur_usd_rate, ref_eur_gbp_rate, history_data, asset_details, raw_history_df, daily_history_df, full_ticker_data = {}, {}, 1.0, 1.0, 1.0, 1.0, {}, {}, pd.DataFrame(), pd.DataFrame(), {}
         
         if eur_usd_rate != 1.0:
             st.sidebar.markdown("---")
             st.sidebar.metric("Taux change (1€ = $)", f"{eur_usd_rate:.7f} $")
 
         # --- ENRICHISSEMENT DU DATAFRAME AVEC LES DONNÉES DE MARCHÉ ---
+        revolut_rows = []
+        if rev_eur_dep > 0 or rev_eur_int > 0:
+            revolut_rows.append({
+                "Nom de l'actif": "Revolut Flexible (EUR)", "Ticker": "REVOLUT_EUR", 
+                "Total de l'actif": rev_eur_dep, 
+                "Unités": rev_eur_dep + rev_eur_int, 
+                "Type d'actif": "Fonds Monétaire"
+            })
+            st.session_state.saved_currencies["Revolut Flexible (EUR)"] = "EUR"
+            market_prices["REVOLUT_EUR"] = 1.0
+            ref_prices["REVOLUT_EUR"] = 1.0
+            
+        if rev_usd_dep > 0 or rev_usd_int > 0:
+            revolut_rows.append({
+                "Nom de l'actif": "Revolut Flexible (USD)", "Ticker": "REVOLUT_USD", 
+                "Total de l'actif": rev_usd_dep / eur_usd_rate if eur_usd_rate > 0 else rev_usd_dep, 
+                "Unités": rev_usd_dep + rev_usd_int, 
+                "Type d'actif": "Fonds Monétaire"
+            })
+            st.session_state.saved_currencies["Revolut Flexible (USD)"] = "USD"
+            market_prices["REVOLUT_USD"] = 1.0
+            ref_prices["REVOLUT_USD"] = 1.0
+            
+        if rev_gbp_dep > 0 or rev_gbp_int > 0:
+            revolut_rows.append({
+                "Nom de l'actif": "Revolut Flexible (GBP)", "Ticker": "REVOLUT_GBP", 
+                "Total de l'actif": rev_gbp_dep / eur_gbp_rate if eur_gbp_rate > 0 else rev_gbp_dep, 
+                "Unités": rev_gbp_dep + rev_gbp_int, 
+                "Type d'actif": "Fonds Monétaire"
+            })
+            st.session_state.saved_currencies["Revolut Flexible (GBP)"] = "GBP"
+            market_prices["REVOLUT_GBP"] = 1.0
+            ref_prices["REVOLUT_GBP"] = 1.0
+            
+        if revolut_rows:
+            df_revolut = pd.DataFrame(revolut_rows)
+            df_hold = pd.concat([df_hold, df_revolut], ignore_index=True)
+
         def get_row_currency(asset_name, ticker):
             """Détermine la devise pour une ligne : priorité à la config manuelle, sinon heuristique."""
             # Priorité absolue à la configuration manuelle
@@ -574,15 +659,17 @@ if df is not None:
 
         df_hold['Devise'] = df_hold.apply(lambda x: get_row_currency(x["Nom de l'actif"], x['Ticker']), axis=1)
 
-        def get_converted_price(price_dict, ticker, currency, rate):
+        def get_converted_price(price_dict, ticker, currency, rate_usd, rate_gbp):
             """Récupère un prix et le convertit en EUR si nécessaire."""
             raw_price = price_dict.get(ticker, 0.0)
             
             if raw_price == 0.0: return 0.0
             
-            # Conversion seulement si la devise est USD
-            if currency == "USD":
-                return raw_price / rate
+            # Conversion en EUR pour devises étrangères
+            if currency == "USD" and rate_usd > 0:
+                return raw_price / rate_usd
+            if currency == "GBP" and rate_gbp > 0:
+                return raw_price / rate_gbp
             return raw_price
         
         def get_history(ticker):
@@ -701,8 +788,8 @@ if df is not None:
             devise = get_row_currency(asset_name, ticker)
 
             # Prix convertis
-            prix_actuel = get_converted_price(market_prices, ticker, devise, eur_usd_rate)
-            prix_ref = get_converted_price(ref_prices, ticker, devise, eur_usd_rate)
+            prix_actuel = get_converted_price(market_prices, ticker, devise, eur_usd_rate, eur_gbp_rate)
+            prix_ref = get_converted_price(ref_prices, ticker, devise, ref_eur_usd_rate, ref_eur_gbp_rate)
 
             # Historique & évolution
             historique = history_data.get(ticker, [])
@@ -819,6 +906,7 @@ if df is not None:
 
     if app_page == "📊 Tableau de Bord":
         st.markdown("###  📊 Vue d'ensemble")
+        
         # Calcul des métriques globales du portefeuille.
         total_invested = df_hold["Total de l'actif"].sum()
         current_value_total = df_hold["Valeur Actuelle"].sum()
