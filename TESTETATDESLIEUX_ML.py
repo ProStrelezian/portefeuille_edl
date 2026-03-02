@@ -310,7 +310,10 @@ def fetch_market_data(tickers):
         
         # Historique et Référence (Basés sur Daily/Hist pour cohérence)
         if not df_hist.empty:
-            history_data[ticker] = df_hist['Close'].tolist()
+            # Restriction à 3 mois (~90 jours calendaires) pour correspondre à "Tendance (3 mois)"
+            # et pour que la polynomiale (PolyFit) modélise la tendance récente, pas l'historique de 2 ans.
+            cutoff_date = df_hist.index.max() - pd.Timedelta(days=90)
+            history_data[ticker] = df_hist.loc[df_hist.index >= cutoff_date, 'Close'].tolist()
             # Reference = Clôture veille (avant-dernière valeur si la dernière est aujourd'hui, ou dernière si data pas à jour)
             # Simplification : on prend l'avant-dernière valeur du daily
             if len(df_hist) > 1:
