@@ -942,12 +942,13 @@ if df is not None:
                     
                     st.subheader(" ⚖️ Risque et Performance Globale (Historique Long Terme & 30J)")
                     st.write("") # Espace ajouté
-                    kcol1, kcol2, kcol3, kcol4 = st.columns(4)
-                    kcol1.metric("Ratio de Sharpe (LT)", f"{kpis_hist['Sharpe']:.2f}", help="Calculé sur 2 ans d'historique. Indicateur d'efficience (Rendement ajusté au risque). >1 est bon, >2 est fantastique.")
-                    kcol2.metric("Max Drawdown (LT)", f"{kpis_hist['Max Drawdown']:.2f} %", help="Calculé sur 2 ans d'historique. Perte maximale (du plus haut au plus bas). Mesure votre pire scénario.")
-                    kcol3.metric("Volatilité Annuelle (LT)", f"{kpis_hist['Volatilité']:.2f} %", help="Calculé sur 2 ans d'historique. Indice de turbulence. Plus le % est élevé, plus le portefeuille fait des montagnes russes.")
+                    kcol1, kcol2, kcol3, kcol4, kcol5 = st.columns(5)
+                    kcol1.metric("Ratio de Sharpe (LT)", f"{kpis_hist['Sharpe']:.2f}", help="Calculé sur 2 ans d'historique. Indicateur de rendement ajusté au risque global (vs T-Note 10A US). >1 est bon, >2 est fantastique.")
+                    kcol2.metric("Ratio de Sortino (LT)", f"{kpis_hist['Sortino']:.2f}", help="Calculé sur 2 ans. Ne pénalise que le risque de Baisse (contrairement au Sharpe). Idéalement plus élevé que le Sharpe.")
+                    kcol3.metric("Max Drawdown (LT)", f"{kpis_hist['Max Drawdown']:.2f} %", help="Calculé sur 2 ans d'historique. Perte maximale (du plus haut au plus bas). Mesure votre pire scénario.")
+                    kcol4.metric("Volatilité Annuelle (LT)", f"{kpis_hist['Volatilité']:.2f} %", help="Calculé sur 2 ans d'historique. Indice de turbulence. Plus le % est élevé, plus le portefeuille fait des montagnes russes.")
                     if not daily_portfolio_30d.empty:
-                        kcol4.metric("Rendement (30 Jours)", f"{kpis_30d['Period Return']:.2f} %", help="Performance totale du portefeuille uniquement sur les 30 derniers jours.")
+                        kcol5.metric("Rendement (30 Jours)", f"{kpis_30d['Period Return']:.2f} %", help="Performance totale du portefeuille uniquement sur les 30 derniers jours.")
                     else:
                         kcol4.metric("Rendement (30 Jours)", "0.00 %")
                     st.markdown("---")
