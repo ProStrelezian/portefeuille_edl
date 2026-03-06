@@ -54,13 +54,65 @@ CUSTOM_CSS = """
     h4 { font-family: 'Overpass', sans-serif; color: #bcbedc; font-weight: 600; margin-top: 1.5rem; margin-bottom: 0.5rem; }
 
     div[data-testid="stMetric"] {
-        background-color: #151f2e; border-radius: 4px; padding: 20px;
-        box-shadow: 0 14px 30px rgba(0,0,0,.1), 0 4px 4px rgba(0,0,0,.04); border: none;
-        text-align: center; transition: transform 0.2s ease;
+        background: linear-gradient(145deg, #131d2b, #1a2639);
+        border-radius: 16px;
+        padding: 24px 20px;
+        border: 1px solid rgba(61, 180, 242, 0.15);
+        box-shadow: 0 8px 32px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.05);
+        text-align: center;
+        transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+        position: relative;
+        overflow: hidden;
     }
-    div[data-testid="stMetric"]:hover { transform: translateY(-5px); box-shadow: 0 20px 40px rgba(0,0,0,.2); }
-    div[data-testid="stMetricLabel"] { font-size: 0.9rem; color: #8ba0b2; font-weight: 600; justify-content: center; width: 100%; }
-    div[data-testid="stMetricValue"] { font-family: 'Overpass', sans-serif; font-size: 1.6rem; font-weight: 700; color: #3db4f2; }
+    
+    div[data-testid="stMetric"]::before {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0; height: 4px;
+        background: linear-gradient(90deg, #3db4f2, #10e3a9);
+        opacity: 0;
+        transition: opacity 0.3s ease;
+    }
+
+    div[data-testid="stMetric"]:hover { 
+        transform: translateY(-5px); 
+        box-shadow: 0 15px 35px rgba(61, 180, 242, 0.15), 0 0 15px rgba(61, 180, 242, 0.1); 
+        border-color: rgba(61, 180, 242, 0.4);
+    }
+    
+    div[data-testid="stMetric"]:hover::before {
+        opacity: 1;
+    }
+
+    div[data-testid="stMetricLabel"] { 
+        font-size: 0.95rem; 
+        color: #a4b4c4; 
+        font-weight: 700; 
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        justify-content: center; 
+        width: 100%; 
+        margin-bottom: 5px;
+    }
+    
+    div[data-testid="stMetricValue"] { 
+        font-family: 'Overpass', sans-serif; 
+        font-size: 1.85rem; 
+        font-weight: 800; 
+        color: #ffffff; 
+        text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    }
+    
+    /* Centrage et style du Delta (+/-) en dessous de la valeur principale */
+    div[data-testid="stMetricDelta"] {
+        justify-content: center;
+        font-weight: 600;
+        font-size: 1rem;
+        padding-top: 4px;
+    }
+    div[data-testid="stMetricDelta"] > div {
+        justify-content: center;
+    }
 
     div.stButton > button {
         background-color: #3db4f2; color: white; border: none; border-radius: 3px;

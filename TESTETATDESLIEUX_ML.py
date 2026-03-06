@@ -704,6 +704,21 @@ if df is not None:
                 last_row.get('Stoch_K')
             )
 
+        # --- CALCUL PRIX 30 MIN ---
+        def get_price_30m_ago(ticker):
+            try:
+                if raw_history_df is None or raw_history_df.empty: return 0.0
+                s = get_ticker_data(raw_history_df, ticker, 'Close').dropna()
+                if s.empty: return 0.0
+                target = s.index[-1] - pd.Timedelta(minutes=30)
+                past = s[s.index <= target]
+                if past.empty: return float(s.iloc[0])
+                return float(past.iloc[-1])
+            except Exception:
+                return 0.0
+                
+        prices_30m = {t: get_price_30m_ago(t) for t in df_hold['Ticker'].unique() if pd.notna(t)}
+
         # --- ENRICHISSEMENT EN UNE SEULE PASSE ---
         # On parcourt df_hold une seule fois pour calculer toutes les colonnes dérivées,
         # au lieu de faire 10+ .apply() successifs qui repassent chaque fois sur tout le DataFrame.
@@ -716,6 +731,7 @@ if df is not None:
             # Prix convertis
             prix_actuel = get_converted_price(market_prices, ticker, devise, eur_usd_rate)
             prix_ref = get_converted_price(ref_prices, ticker, devise, eur_usd_rate)
+            prix_30m = get_converted_price(prices_30m, ticker, devise, eur_usd_rate)
 
             # Historique & évolution
             historique = history_data.get(ticker, [])
@@ -757,6 +773,7 @@ if df is not None:
                 'Devise': devise,
                 'Prix Actuel': prix_actuel,
                 'Prix Reference': prix_ref,
+                'Prix 30m': prix_30m,
                 'Historique': historique,
                 'Evol. Hebdo %': evol_hebdo,
                 'Trend 7j': trend_7j,
@@ -810,6 +827,7 @@ if df is not None:
         # Calculs de valeurs (vectorisés)
         df_hold['Valeur Actuelle'] = np.where(df_hold['Prix Actuel'] > 0, df_hold['Unités'] * df_hold['Prix Actuel'], df_hold["Total de l'actif"])
         df_hold['Valeur Reference'] = np.where(df_hold['Prix Reference'] > 0, df_hold['Unités'] * df_hold['Prix Reference'], df_hold["Total de l'actif"])
+        df_hold['Valeur 30m'] = np.where(df_hold['Prix 30m'] > 0, df_hold['Unités'] * df_hold['Prix 30m'], df_hold["Total de l'actif"])
         
         # Calcul de l'évolution journalière (vectorisé)
         df_hold['Evol. Jour %'] = np.where(
@@ -850,19 +868,33 @@ if df is not None:
         daily_change_value = current_value_total - reference_value_total
         daily_change_percent = (daily_change_value / reference_value_total * 100) if reference_value_total > 0 else 0.0
         
+        # Calcul de la variation sur 30 minutes
+        value_30m_total = df_hold["Valeur 30m"].sum()
+        change_30m_value = current_value_total - value_30m_total
+        change_30m_percent = (change_30m_value / value_30m_total * 100) if value_30m_total > 0 else 0.0
+        
         # Calcul des gains réalisés (plus-values de vente + dividendes + staking).
         capital_gains = df_sold["Prix de vente"].sum() - df_sold["Total de l'actif"].sum() if not df_sold.empty else 0 # Gains sur ventes
         dividends = df["Dividende"].sum() if "Dividende" in df.columns else 0
         staking = df["Gain de staking"].sum() if "Gain de staking" in df.columns else 0
         realized_gains = capital_gains + dividends + staking
 
-        col1, col2, col3, col4, col5 = st.columns(5)
-        col1.metric("Total Investi", f"{total_invested:,.2f} €")
-        col2.metric("Valeur Actuelle", f"{current_value_total:,.2f} €", delta=f"{daily_change_value:+.2f}€ ({daily_change_percent:+.3f}%)", help="Variation par rapport à la clôture de la veille.")
-        col3.metric("Performance Totale", f"{(total_pnl_hold/total_invested)*100:+.2f} %" if total_invested > 0 else "0%", delta=f"{total_pnl_hold:+.2f}€", help=f"Inclut Plus-value latente + Staking ({total_staking_hold:.2f}€) + Dividendes ({total_div_hold:.2f}€)")
-        col4.metric("Gains Réalisés", f"{realized_gains:,.2f} €", help=f"Plus-values: {capital_gains:.2f}€ | Dividendes/Staking: {dividends+staking:.2f}€")
+        st.caption("Synthèse globale de la performance et de la valeur de vos investissements.")
+
+        # Ligne 1 : Principaux indicateurs de valeur
+        c1, c2, c3 = st.columns(3)
+        c1.metric("💰 Total Investi", f"{total_invested:,.2f} €".replace(',', ' '), help="La somme initiale investie sur les actifs actuellement détenus.")
+        c2.metric("💎 Valeur Actuelle", f"{current_value_total:,.2f} €".replace(',', ' '), delta=f"{daily_change_value:+.2f}€ ({daily_change_percent:+.3f}%)", help="Valeur en temps réel. La variation correspond à l'évolution (Gain/Perte latente) depuis la clôture de la veille.")
+        c3.metric("🚀 Performance Totale", f"{(total_pnl_hold/total_invested)*100:+.2f} %" if total_invested > 0 else "0%", delta=f"{total_pnl_hold:+.2f}€".replace(',', ' '), help=f"Inclut la Plus-value latente + Staking ({total_staking_hold:.2f}€) + Dividendes ({total_div_hold:.2f}€)")
+
+        st.markdown("<br>", unsafe_allow_html=True) # Espace entre les lignes
+
+        # Ligne 2 : Indicateurs secondaires court terme & gains réalisés
+        c4, c5, c6 = st.columns(3)
+        c4.metric("⏱️ Var. 30 min", f"{change_30m_percent:+.3f} %", delta=f"{change_30m_value:+.2f}€".replace(',', ' '), help="Évolution intragroupe sur la dernière demi-heure. Indique la dynamique très court terme.")
+        c5.metric("💸 Gains Réalisés", f"{realized_gains:,.2f} €".replace(',', ' '), help=f"Gains actés. Plus-values sur ventes: {capital_gains:.2f}€ | Dividendes/Staking perçus et hors-portefeuille: {dividends+staking:.2f}€")
         val_gains = f"{realized_gains/total_invested*100:,.3f} %" if total_invested > 0 else "0.00 %"
-        col5.metric("Gains Réalisés/Total", val_gains)
+        c6.metric("🏦 Ratio Gains / Investi", val_gains, help="Ratio des gains déjà sécurisés par rapport au total de vos investissements en cours.")
 
         st.markdown("---")
 
