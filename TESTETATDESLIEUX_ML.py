@@ -9,7 +9,7 @@ import yfinance as yf # API pour les données de marché
 import time
 import numpy as np # Nécessaire pour les calculs de prédiction
 import requests_cache
-from modules.ml_models import calculate_ml_prediction, calculate_smart_prediction
+from modules.ml_models import calculate_ml_prediction, calculate_smart_prediction, calculate_prophet_prediction
 from modules.kpi_metrics import calculate_portfolio_kpis
 from modules.config import CUSTOM_CSS, DEFAULT_PORTFOLIO_CSV, TICKER_FIXES
 from modules.utils import clean_currency_series, extract_ticker, is_ticker_usd_heuristic
@@ -663,12 +663,22 @@ if df is not None:
             df_t = full_ticker_data.get(ticker, pd.DataFrame())
             required_cols = ['Close', 'High', 'Low', 'Volume']
             if df_t is None or df_t.empty or not all(c in df_t.columns for c in required_cols):
-                return (None, None)
+                return (None, None, None, None, None, None)
+            
             # Création d'un tuple hashable pour la mise en cache
-            data_tuple = tuple(df_t[required_cols].itertuples(index=False, name=None))
-            _pred_price_30, pct_change_30 = calculate_ml_prediction(data_tuple, days_ahead=30)
-            _pred_price_7, pct_change_7 = calculate_ml_prediction(data_tuple, days_ahead=7)
-            return (pct_change_30, pct_change_7)
+            # IMPORT: index=True est critique ici car Prophet et le nouveau XGBoost ont besoin des dates (l'index de df_t).
+            # Cela crée un tuple où le premier élément de chaque ligne est l'index (la date).
+            data_tuple = tuple(df_t[required_cols].reset_index().itertuples(index=False, name=None))
+            
+            # XGBoost
+            _pred_price_30_ml, pct_change_30_ml = calculate_ml_prediction(data_tuple, days_ahead=30)
+            _pred_price_7_ml, pct_change_7_ml = calculate_ml_prediction(data_tuple, days_ahead=7)
+            
+            # Prophet
+            _pred_price_30_p, pct_change_30_p, _, _ = calculate_prophet_prediction(data_tuple, days_ahead=30)
+            _pred_price_7_p, pct_change_7_p, _, _ = calculate_prophet_prediction(data_tuple, days_ahead=7)
+            
+            return (pct_change_30_ml, pct_change_7_ml, pct_change_30_p, pct_change_7_p)
 
         def get_technical_indicators(ticker):
             df_t = full_ticker_data.get(ticker, pd.DataFrame())
@@ -727,8 +737,8 @@ if df is not None:
                 bas_7 = bas_7 / eur_usd_rate if bas_7 is not None else None
                 haut_7 = haut_7 / eur_usd_rate if haut_7 is not None else None
 
-            # Prédictions ML
-            ml_pct_30, ml_pct_7 = get_ml_prediction_display(ticker)
+            # Prédictions ML & Prophet
+            ml_pct_30, ml_pct_7, proph_pct_30, proph_pct_7 = get_ml_prediction_display(ticker)
 
             # Indicateurs techniques
             mm200, mme9, mme21, macd, atr, bb_haut, bb_bas, stoch_k = get_technical_indicators(ticker)
@@ -763,6 +773,8 @@ if df is not None:
                 'Evol. Haut 7j': evol_haut_7d,
                 'Proj. 30j (ML)': ml_pct_30,
                 'Proj. 7j (ML)': ml_pct_7,
+                'Proj. 30j (Prophet)': proph_pct_30,
+                'Proj. 7j (Prophet)': proph_pct_7,
                 'MM 200': mm200,
                 'MME 9': mme9,
                 'MME 21': mme21,
@@ -1063,9 +1075,10 @@ if df is not None:
             *   **Bandes Bollinger** : Canaux de volatilité. Si le prix touche le haut, risque de correction. Si bas, rebond possible.
             *   **Stoch %K** : Oscillateur (0-100). >80 = Surchauffe (Vente?), <20 = Survendu (Achat?).
             
-            **3. Prédictions : 🤖 IA (XGBoost) vs 📐 Polynomiale**
-            *   **🤖 (ML XGBoost)** : Un modèle de machine learning entraîné sur les indicateurs techniques (RSI, MACD, Volume, ATR…). Il détecte des patterns non-linéaires et est souvent plus fiable pour anticiper les retournements de tendance. **Colonne "7j/30j 🤖 %".**
-            *   **📐 (Poly)** : Une **régression polynomiale de degré 2** (mathématique pure, pas d'IA). Elle prolonge simplement la courbe de tendance actuelle. Utile uniquement si la tendance est stable et régulière. **Colonne "7j/30j 📐 %".** ⚠️ *Ne pas confondre avec une prédiction ML.*
+            **3. Prédictions : 🤖 (ML XGBoost) vs 🔮 (Prophet) vs 📐 (Polynomiale)**
+            *   **🤖 (ML XGBoost)** : Détecte des patterns techniques complexes (RSI, Volatilité) pour des prévisions agressives. **Colonne "7j/30j 🤖 %".**
+            *   **🔮 (Prophet)** : L'algorithme de Facebook, spécialisé dans les cycles et la saisonnalité (effets week-end). Plus modéré et naturel. **Colonne "7j/30j 🔮 %".**
+            *   **📐 (Poly)** : Simple prolongement géométrique de la tendance. ⚠️ *Souvent trop extrême, à utiliser avec précaution.* **Colonne "7j/30j 📐 %".**
             """)
 
         st.write("") # Espace ajouté
@@ -1074,9 +1087,9 @@ if df is not None:
 
         # st.dataframe est utilisé pour un affichage interactif avec des mini-graphiques.
         st.dataframe(
-            df_details_sorted[["Nom de l'actif", "Type", "Prix Actuel", "Valeur Actuelle", "Evol. Jour %", "Evol. Hebdo %", "Trend 7j", "Performance %", "Signal Technique", "Stoch K", "ATR", "MACD", "MM 200", "BB Haut", "BB Bas", "Proj. 7j (ML)", "Proj. 7j (%)", "Proj. 7j Bas", "Proj. 7j Haut", "Proj. 30j (ML)", "Proj. 30j (%)", "Proj. 30j Bas", "Proj. 30j Haut", "Historique"]]
+            df_details_sorted[["Nom de l'actif", "Type", "Prix Actuel", "Valeur Actuelle", "Evol. Jour %", "Evol. Hebdo %", "Trend 7j", "Performance %", "Signal Technique", "Stoch K", "ATR", "MACD", "MM 200", "BB Haut", "BB Bas", "Proj. 7j (Prophet)", "Proj. 7j (ML)", "Proj. 7j (%)", "Proj. 30j (Prophet)", "Proj. 30j (ML)", "Proj. 30j (%)", "Historique"]]
             .style
-            .map(style_trend_text, subset=['Evol. Jour %', 'Evol. Hebdo %', 'Performance %', 'MACD', 'Proj. 7j (%)', 'Proj. 30j (%)', 'Proj. 7j (ML)', 'Proj. 30j (ML)'])
+            .map(style_trend_text, subset=['Evol. Jour %', 'Evol. Hebdo %', 'Performance %', 'MACD', 'Proj. 7j (%)', 'Proj. 30j (%)', 'Proj. 7j (ML)', 'Proj. 30j (ML)', 'Proj. 7j (Prophet)', 'Proj. 30j (Prophet)'])
             .map(style_signal_text, subset=['Signal Technique']),
             column_config={
                 "Nom de l'actif": st.column_config.TextColumn("Actif", width="medium"),
@@ -1094,14 +1107,12 @@ if df is not None:
                 "Stoch K": st.column_config.NumberColumn("Stoch %K", format="%.0f", help="Oscillateur Stochastique (14, 3)"),
                 "MACD": st.column_config.NumberColumn("MACD", format="%.2f", help="MACD (12, 26)"),
                 "ATR": st.column_config.NumberColumn("ATR (14)", format="%.2f €", help="Average True Range (Volatilité)"),
-                "Proj. 7j (%)": st.column_config.NumberColumn("7j 📐 Poly %", format="%+.2f %%", help="Projection par régression polynomiale (mathématique, pas ML) sur 7 jours"),
-                "Proj. 7j (ML)": st.column_config.NumberColumn("7j 🤖 ML %", format="%+.2f %%", help="Projection XGBoost (Machine Learning) sur 7 jours"),
-                "Proj. 7j Bas": st.column_config.NumberColumn("7j Min", format="%.2f €", help="Fourchette basse polynomiale 7j"),
-                "Proj. 7j Haut": st.column_config.NumberColumn("7j Max", format="%.2f €", help="Fourchette haute polynomiale 7j"),
-                "Proj. 30j (%)": st.column_config.NumberColumn("30j 📐 Poly %", format="%+.2f %%", help="Projection par régression polynomiale (mathématique, pas ML) sur 30 jours"),
-                "Proj. 30j (ML)": st.column_config.NumberColumn("30j 🤖 ML %", format="%+.2f %%", help="Projection XGBoost (Machine Learning) sur 30 jours"),
-                "Proj. 30j Bas": st.column_config.NumberColumn("30j Min", format="%.2f €", help="Fourchette basse 30j"),
-                "Proj. 30j Haut": st.column_config.NumberColumn("30j Max", format="%.2f €", help="Fourchette haute 30j"),
+                "Proj. 7j (%)": st.column_config.NumberColumn("7j 📐 Poly %", format="%+.2f %%", help="Projection Polynomiale (mathématique simple) sur 7 jours"),
+                "Proj. 7j (ML)": st.column_config.NumberColumn("7j 🤖 XGBoost %", format="%+.2f %%", help="Projection XGBoost (Machine Learning technique) sur 7 jours"),
+                "Proj. 7j (Prophet)": st.column_config.NumberColumn("7j 🔮 Prophet %", format="%+.2f %%", help="Projection Prophet (Saisonnalité & Historique) sur 7 jours"),
+                "Proj. 30j (%)": st.column_config.NumberColumn("30j 📐 Poly %", format="%+.2f %%", help="Projection Polynomiale (mathématique simple) sur 30 jours"),
+                "Proj. 30j (ML)": st.column_config.NumberColumn("30j 🤖 XGBoost %", format="%+.2f %%", help="Projection XGBoost (Machine Learning technique) sur 30 jours"),
+                "Proj. 30j (Prophet)": st.column_config.NumberColumn("30j 🔮 Prophet %", format="%+.2f %%", help="Projection Prophet (Saisonnalité & Historique) sur 30 jours"),
                 "Historique": st.column_config.LineChartColumn("Tendance (3 mois)"),
             },
             width="stretch",
@@ -1281,8 +1292,9 @@ if df is not None:
                     ), row=1, col=1)
 
                 # 2. Cible IA (Machine Learning)
-                # On utilise les données complètes pour le calcul ML
-                data_tuple = tuple(df_full[['Close', 'High', 'Low', 'Volume']].itertuples(index=False, name=None))
+                # On utilise les données complètes pour le calcul ML. 
+                # IMPORTANT : reset_index() obligatoire pour que la Date fasse partie du tuple attendu par ml_models.py
+                data_tuple = tuple(df_full[['Close', 'High', 'Low', 'Volume']].reset_index().itertuples(index=False, name=None))
                 pred_price_ml, _ = calculate_ml_prediction(data_tuple, days_ahead=30)
                 
                 if pred_price_ml:

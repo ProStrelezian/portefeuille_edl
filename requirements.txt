@@ -13,3 +13,4 @@ openai
 google-generativeai
 openpyxl
 odfpy
+prophet

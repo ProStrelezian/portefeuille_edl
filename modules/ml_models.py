@@ -3,6 +3,16 @@ import pandas as pd
 import numpy as np
 from xgboost import XGBRegressor
 import streamlit as st
+import logging
+
+# On retire les logs Prophet qui peuvent spammer la console Streamlit
+logging.getLogger('prophet').setLevel(logging.WARNING)
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+try:
+    from prophet import Prophet
+except ImportError:
+    Prophet = None
 
 def create_features(df, window_sizes=[5, 10, 20]):
     df_features = df.copy()
@@ -17,7 +27,10 @@ def create_features(df, window_sizes=[5, 10, 20]):
 
 @st.cache_data(show_spinner=False)
 def calculate_ml_prediction(data_tuple, days_ahead=30):
-    df = pd.DataFrame(list(data_tuple), columns=['Close', 'High', 'Low', 'Volume']).astype(float)
+    # data_tuple contient maintenant l'index de date en plus des autres colonnes
+    # index: 0, Close: 1, High: 2, Low: 3, Volume: 4
+    df = pd.DataFrame(list(data_tuple), columns=['Date', 'Close', 'High', 'Low', 'Volume'])
+    df = df.set_index('Date').astype(float)
     if df.empty or len(df) < 60:
         return None, None
     try:
@@ -68,11 +81,11 @@ def calculate_ml_prediction(data_tuple, days_ahead=30):
         feature_cols = [col for col in df_train.columns if col not in ['price', 'target', 'time_idx']]
         X_train, y_train = df_train[feature_cols], df_train['target']
         
-        # Modèle allégé pour Streamlit Cloud (très rapide, conso RAM minime)
+        # Modèle optimisé pour plus de précision (compromis Cloud / Performance)
         model = XGBRegressor(
-            n_estimators=30,      # Réduit de 100 à 30 (plus rapide)
-            max_depth=3,          # Réduit de 4 à 3 (moins lourd en mémoire)
-            learning_rate=0.1,    # Compensé par un lr plus élevé
+            n_estimators=100,     # Augmenté de 30 à 100 pour plus de précision
+            max_depth=5,          # Augmenté de 3 à 5 pour capter plus de nuances
+            learning_rate=0.05,   # Réduit pour une convergence plus fine
             random_state=42,
             n_jobs=1              # Empêche XGBoost de saturer le CPU virtuel (single_thread mode)
         )
@@ -100,7 +113,12 @@ def calculate_smart_prediction(prices_tuple, days_ahead=30):
     try:
         y = np.array(prices)
         x = np.arange(len(y))
-        coeffs = np.polyfit(x, y, 2)
+        
+        # Ajout de poids exponentiels pour donner plus d'importance aux données récentes
+        # Le dernier point aura un poids de 1.0, le plus ancien aura un poids plus faible
+        weights = np.exp(np.linspace(-2, 0, len(y)))
+        
+        coeffs = np.polyfit(x, y, 2, w=weights)
         poly_func = np.poly1d(coeffs)
         
         future_x = len(x) + days_ahead
@@ -124,5 +142,74 @@ def calculate_smart_prediction(prices_tuple, days_ahead=30):
         return float(future_price), float(pct_change), float(future_low), float(future_high)
     except Exception as e:
         print(f"Erreur calculate_smart_prediction (Polyfit): {e}")
+        return None, None, None, None
+
+
+@st.cache_data(show_spinner=False)
+def calculate_prophet_prediction(data_tuple, days_ahead=30):
+    if Prophet is None:
+        return None, None, None, None
+        
+    # data_tuple contient Date, Close, High, Low, Volume
+    df_raw = pd.DataFrame(list(data_tuple), columns=['Date', 'Close', 'High', 'Low', 'Volume'])
+    
+    if df_raw.empty or len(df_raw) < 20: 
+        # Prophet a besoin d'un minimum de points, mais il est plus flexible que XGBoost.
+        return None, None, None, None
+
+    try:
+        # Prophet a spécifiquement besoin de colonnes 'ds' (datestamp) et 'y' (valeur)
+        df_prophet = pd.DataFrame({
+            'ds': pd.to_datetime(df_raw['Date']), # Formatage stricte de la date
+            'y': df_raw['Close'].astype(float) # Valeur de clôture
+        })
+        
+        # Filtre de sécurité: Si un prix est = 0, on le retire pour la log-transformation
+        df_prophet = df_prophet[df_prophet['y'] > 0]
+        if df_prophet.empty: return None, None, None, None
+        
+        # Transformation Logarithmique : Réduit l'impact de l'hyper-volatilité (très fréquent en crypto)
+        # Cela empêche les prédictions (notamment la fourcehette haute/basse) d'exploser vers l'infini ou le négatif.
+        df_prophet['y'] = np.log(df_prophet['y'])
+
+        # Paramétrage de Prophet optimisé pour de la finance de court/moyen terme
+        model = Prophet(
+            daily_seasonality=False, # Pas assez de granularité (on est en journalier)
+            weekly_seasonality=True, # Le week-end est important en crypto, faible en bourse
+            yearly_seasonality=False, # Historique de 3 mois = pas de tendance annuelle pertinente
+            changepoint_prior_scale=0.05 # Flexibilité de la tendance (0.05 par défaut)
+        )
+        
+        # Entraînement
+        model.fit(df_prophet)
+        
+        # Création du DataFrame pour la prédiction
+        future = model.make_future_dataframe(periods=days_ahead)
+        forecast = model.predict(future)
+        
+        # Récupération des données du dernier jour prédit
+        last_prediction = forecast.iloc[-1]
+        
+        # Inversion de la transformation Logarithmique (np.exp) pour revenir aux prix réels
+        pred_price = np.exp(last_prediction['yhat'])
+        pred_low = np.exp(last_prediction['yhat_lower'])
+        pred_high = np.exp(last_prediction['yhat_upper'])
+        
+        # Récupération du prix actuel (dernier prix connu)
+        current_price = df_raw['Close'].iloc[-1]
+        
+        if current_price <= 0:
+            return None, None, None, None
+            
+        # Calcul de l'évolution en %
+        pct_change = ((pred_price - current_price) / current_price) * 100
+        
+        # Sécurité basique
+        if pred_low <= 0: pred_low = 0.01
+
+        return float(pred_price), float(pct_change), float(pred_low), float(pred_high)
+        
+    except Exception as e:
+        print(f"Erreur calculate_prophet_prediction : {e}")
         return None, None, None, None
 
