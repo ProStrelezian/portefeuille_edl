@@ -4,10 +4,13 @@ import pandas as pd
 import yfinance as yf
 import requests_cache
 
+import streamlit as st
+
 # Cache de court terme pour éviter de spammer Yahoo Finance pour le taux sans risque
 session = requests_cache.CachedSession('yfinance.cache')
 session.headers = {'User-agent': 'Mozilla/5.0'}
 
+@st.cache_data(ttl=86400)
 def get_dynamic_risk_free_rate(default_rate=0.03):
     """
     Récupère le rendement du bon du Trésor américain à 10 ans (^TNX).

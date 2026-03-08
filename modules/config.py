@@ -36,29 +36,33 @@ CUSTOM_CSS = """
         font-family: 'Overpass', sans-serif;
         color: #edf1f5;
         font-weight: 800 !important;
-        padding-bottom: 15px;
+        padding-bottom: 10px;
         text-align: center;
-        margin-bottom: 30px;
+        margin-bottom: 20px;
+        font-size: 2.1rem !important;
         text-shadow: 0 4px 12px rgba(0,0,0,0.3);
     }
 
-    h2 { font-family: 'Overpass', sans-serif; color: #edf1f5; font-weight: 700; margin-top: 2rem; margin-bottom: 1rem; }
+    h2 { font-family: 'Overpass', sans-serif; color: #edf1f5; font-weight: 700; margin-top: 1.5rem; margin-bottom: 1rem; font-size: 1.6rem; }
 
     h3 {
-        font-family: 'Overpass', sans-serif; color: #edf1f5; border-left: 5px solid #3db4f2;
-        padding-left: 15px; margin-top: 3rem; margin-bottom: 1.5rem; font-weight: 700;
-        background: linear-gradient(90deg, rgba(61, 180, 242, 0.1) 0%, transparent 100%);
-        padding-top: 10px; padding-bottom: 10px; border-radius: 0 4px 4px 0;
+        font-family: 'Overpass', sans-serif; 
+        color: #edf1f5; 
+        margin-top: 2rem; 
+        margin-bottom: 1rem; 
+        font-weight: 800;
+        font-size: 1.35rem; /* Réduit depuis 1.5rem */
+        letter-spacing: -0.5px;
     }
     
-    h4 { font-family: 'Overpass', sans-serif; color: #bcbedc; font-weight: 600; margin-top: 1.5rem; margin-bottom: 0.5rem; }
+    h4 { font-family: 'Overpass', sans-serif; color: #bcbedc; font-weight: 600; margin-top: 1.2rem; margin-bottom: 0.5rem; font-size: 1.1rem; }
 
     div[data-testid="stMetric"] {
         background: linear-gradient(145deg, #131d2b, #1a2639);
-        border-radius: 16px;
-        padding: 24px 20px;
-        border: 1px solid rgba(61, 180, 242, 0.15);
-        box-shadow: 0 8px 32px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.05);
+        border-radius: 12px;
+        padding: 18px 15px; /* Réduit depuis 24px 20px */
+        border: none;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.15);
         text-align: center;
         transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
         position: relative;
@@ -68,15 +72,15 @@ CUSTOM_CSS = """
     div[data-testid="stMetric"]::before {
         content: '';
         position: absolute;
-        top: 0; left: 0; right: 0; height: 4px;
+        top: 0; left: 0; right: 0; height: 3px;
         background: linear-gradient(90deg, #3db4f2, #10e3a9);
         opacity: 0;
         transition: opacity 0.3s ease;
     }
 
     div[data-testid="stMetric"]:hover { 
-        transform: translateY(-5px); 
-        box-shadow: 0 15px 35px rgba(61, 180, 242, 0.15), 0 0 15px rgba(61, 180, 242, 0.1); 
+        transform: translateY(-4px); 
+        box-shadow: 0 12px 25px rgba(61, 180, 242, 0.15), 0 0 10px rgba(61, 180, 242, 0.1); 
         border-color: rgba(61, 180, 242, 0.4);
     }
     
@@ -85,19 +89,19 @@ CUSTOM_CSS = """
     }
 
     div[data-testid="stMetricLabel"] { 
-        font-size: 0.95rem; 
+        font-size: 0.85rem; /* Réduit depuis 0.95rem */
         color: #a4b4c4; 
         font-weight: 700; 
         text-transform: uppercase;
         letter-spacing: 0.5px;
         justify-content: center; 
         width: 100%; 
-        margin-bottom: 5px;
+        margin-bottom: 4px;
     }
     
     div[data-testid="stMetricValue"] { 
         font-family: 'Overpass', sans-serif; 
-        font-size: 1.85rem; 
+        font-size: 1.6rem; /* Réduit depuis 1.85rem */
         font-weight: 800; 
         color: #ffffff; 
         text-shadow: 0 2px 4px rgba(0,0,0,0.3);
@@ -107,8 +111,8 @@ CUSTOM_CSS = """
     div[data-testid="stMetricDelta"] {
         justify-content: center;
         font-weight: 600;
-        font-size: 1rem;
-        padding-top: 4px;
+        font-size: 0.9rem; /* Réduit depuis 1rem */
+        padding-top: 3px;
     }
     div[data-testid="stMetricDelta"] > div {
         justify-content: center;
@@ -123,9 +127,69 @@ CUSTOM_CSS = """
     div[data-testid="stTabs"] button[role="tab"] { color: #8ba0b2; font-weight: 600; font-family: 'Overpass', sans-serif; }
     div[data-testid="stTabs"] button[aria-selected="true"] { color: #3db4f2; border-bottom-color: #3db4f2 !important; }
     
+    /* =========================================
+       RESPONSIVE DESIGN (Mobiles & Tablettes)
+       ========================================= */
+       
     @media (max-width: 768px) {
-        .block-container { padding-top: 2rem !important; }
-        h1 { font-size: 1.8rem !important; }
+        /* Nettoyage des marges globales */
+        .block-container { 
+            padding-top: 1rem !important; 
+            padding-left: 0.5rem !important;
+            padding-right: 0.5rem !important;
+        }
+        
+        /* Ajustement de la typographie */
+        h1 { 
+            font-size: 1.6rem !important; 
+            margin-bottom: 20px !important;
+        }
+        h2 { font-size: 1.4rem !important; margin-top: 1.5rem; }
+        h3 { 
+            font-size: 1.25rem !important; 
+            margin-top: 2rem !important;
+            margin-bottom: 1rem !important;
+        }
+        
+        /* Réduction de la taille des KPIs (Metrics) */
+        div[data-testid="stMetric"] {
+            padding: 15px 10px !important;
+        }
+        
+        div[data-testid="stMetricValue"] { 
+            font-size: 1.4rem !important; 
+        }
+        
+        div[data-testid="stMetricLabel"] {
+            font-size: 0.8rem !important;
+            white-space: normal;
+        }
+        
+        /* Optimisation de l'affichage des Dataframes */
+        div[data-testid="stDataFrame"] {
+            font-size: 0.85rem !important;
+        }
+        
+        /* Les colonnes métriques "5 columns array" doivent passer à la ligne sur mobile */
+        div[data-testid="column"] {
+            min-width: 100% !important; /* Force la grille à s'empiler verticalement */
+            margin-bottom: 10px;
+        }
+        
+        /* Sidebar plus compacte */
+        section[data-testid="stSidebar"] {
+            width: 280px !important;
+        }
+    }
+    
+    /* Tablettes en mode paysage */
+    @media (min-width: 769px) and (max-width: 1024px) {
+        div[data-testid="column"] {
+            min-width: 33% !important; /* 3 colonnes par ligne environ sur tablette */
+        }
+        div[data-testid="stMetricValue"] { 
+            font-size: 1.6rem !important; 
+        }
     }
 </style>
 """

@@ -73,7 +73,7 @@ def calculate_ml_prediction(data_tuple, days_ahead=30):
         df_train = df_final.dropna(subset=['target']).copy()
         
         # Nettoyage des NaNs dans les features pour éviter les plantages de XGBoost
-        df_train = df_train.fillna(method='bfill').fillna(0)
+        df_train = df_train.bfill().fillna(0)
 
         if df_train.empty or len(df_train) < 10: 
             return None, None
@@ -81,11 +81,11 @@ def calculate_ml_prediction(data_tuple, days_ahead=30):
         feature_cols = [col for col in df_train.columns if col not in ['price', 'target', 'time_idx']]
         X_train, y_train = df_train[feature_cols], df_train['target']
         
-        # Modèle optimisé pour plus de précision (compromis Cloud / Performance)
+        # Modèle optimisé pour plus de vitesse avec Streamlit Cloud
         model = XGBRegressor(
-            n_estimators=100,     # Augmenté de 30 à 100 pour plus de précision
-            max_depth=5,          # Augmenté de 3 à 5 pour capter plus de nuances
-            learning_rate=0.05,   # Réduit pour une convergence plus fine
+            n_estimators=50,      # Réduit de 100 à 50
+            max_depth=4,          # Réduit de 5 à 4
+            learning_rate=0.05,
             random_state=42,
             n_jobs=1              # Empêche XGBoost de saturer le CPU virtuel (single_thread mode)
         )
@@ -172,12 +172,13 @@ def calculate_prophet_prediction(data_tuple, days_ahead=30):
         # Cela empêche les prédictions (notamment la fourcehette haute/basse) d'exploser vers l'infini ou le négatif.
         df_prophet['y'] = np.log(df_prophet['y'])
 
-        # Paramétrage de Prophet optimisé pour de la finance de court/moyen terme
+        # Paramétrage de Prophet optimisé pour de la finance de court/moyen terme et la vitesse
         model = Prophet(
             daily_seasonality=False, # Pas assez de granularité (on est en journalier)
             weekly_seasonality=True, # Le week-end est important en crypto, faible en bourse
             yearly_seasonality=False, # Historique de 3 mois = pas de tendance annuelle pertinente
-            changepoint_prior_scale=0.05 # Flexibilité de la tendance (0.05 par défaut)
+            changepoint_prior_scale=0.05, # Flexibilité de la tendance (0.05 par défaut)
+            uncertainty_samples=20 # NOUVEAU: Baisse drastique des échantillons pour l'intervalle de confiance (gain de vitesse majeur)
         )
         
         # Entraînement

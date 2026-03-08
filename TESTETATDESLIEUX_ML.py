@@ -173,7 +173,7 @@ def fetch_historical_data(tickers):
         if not valid_tickers:
             return {}, pd.DataFrame(), pd.DataFrame()
 
-        tickers_to_fetch = list(set(valid_tickers + ["EURUSD=X"]))
+        tickers_to_fetch = list(set(valid_tickers + ["EURUSD=X", "GBPEUR=X", "CHFEUR=X"]))
         
         try:
             # Helper avec réessai pour yfinance qui est souvent instable
@@ -247,7 +247,7 @@ def fetch_real_time_data(tickers):
     """Télécharge uniquement le dernier prix (très rapide)."""
     if not tickers: return pd.DataFrame()
     valid_tickers = [t for t in tickers if t and isinstance(t, str)]
-    tickers_to_fetch = list(set(valid_tickers + ["EURUSD=X"]))
+    tickers_to_fetch = list(set(valid_tickers + ["EURUSD=X", "GBPEUR=X", "CHFEUR=X"]))
     
     try:
         # Essais multiples pour la robustesse du temps réel
@@ -266,7 +266,7 @@ def fetch_real_time_data(tickers):
 def fetch_market_data(tickers):
     """Orchestrateur : Combine historique (cache long) et temps réel (cache court)."""
     if not tickers:
-        return {}, {}, 1.0, {}, pd.DataFrame(), pd.DataFrame(), {}
+        return {}, {}, {'USD': 1.0, 'GBP': 1.0, 'CHF': 1.0}, {}, pd.DataFrame(), pd.DataFrame(), {}
     
     # 1. Récupération des données
     full_ticker_data, data_intraday, data_daily_close = fetch_historical_data(tickers)
@@ -277,18 +277,23 @@ def fetch_market_data(tickers):
     current_prices = {}
     reference_prices = {}
     history_data = {}
-    eur_usd_rate = 1.0
+    exchange_rates = {'USD': 1.0, 'GBP': 1.0, 'CHF': 1.0}
     
-    # 2. Extraction du taux EUR/USD (Live > Intraday > Daily)
-    rate_series = get_ticker_data(data_live, "EURUSD=X", 'Close')
-    if rate_series.empty:
-        rate_series = get_ticker_data(data_intraday, "EURUSD=X", 'Close')
-    
-    if not rate_series.empty:
+    # 2. Extraction des taux de change (Live > Intraday > Daily)
+    def extract_rate(ticker):
+        rate_series = get_ticker_data(data_live, ticker, 'Close')
+        if rate_series.empty:
+            rate_series = get_ticker_data(data_intraday, ticker, 'Close')
+        if not rate_series.empty:
             valid_rate = rate_series.dropna()
             if not valid_rate.empty:
                 r = float(valid_rate.iloc[-1])
-                if r > 0: eur_usd_rate = r
+                if r > 0: return r
+        return 1.0
+
+    exchange_rates['USD'] = extract_rate("EURUSD=X")
+    exchange_rates['GBP'] = extract_rate("GBPEUR=X")
+    exchange_rates['CHF'] = extract_rate("CHFEUR=X")
 
     # 3. Construction des prix et références
     for ticker in valid_tickers:
@@ -324,7 +329,7 @@ def fetch_market_data(tickers):
             reference_prices[ticker] = 0.0
             history_data[ticker] = []
             
-    return current_prices, reference_prices, eur_usd_rate, history_data, data_intraday, data_daily_close, full_ticker_data
+    return current_prices, reference_prices, exchange_rates, history_data, data_intraday, data_daily_close, full_ticker_data
 
 # --- CACHE 2: AVIS ANALYSTES (Long terme: 24h) ---
 @st.cache_data(ttl=86400)
@@ -533,10 +538,10 @@ if df is not None:
         if unique_tickers:
             if not auto_refresh:
                 with st.spinner('Analyse des marchés en cours...'):
-                    market_prices, ref_prices, eur_usd_rate, history_data, raw_history_df, daily_history_df, full_ticker_data = fetch_market_data(unique_tickers)
+                    market_prices, ref_prices, exchange_rates, history_data, raw_history_df, daily_history_df, full_ticker_data = fetch_market_data(unique_tickers)
                     asset_details = fetch_asset_details(unique_tickers)
             else:
-                market_prices, ref_prices, eur_usd_rate, history_data, raw_history_df, daily_history_df, full_ticker_data = fetch_market_data(unique_tickers)
+                market_prices, ref_prices, exchange_rates, history_data, raw_history_df, daily_history_df, full_ticker_data = fetch_market_data(unique_tickers)
                 asset_details = fetch_asset_details(unique_tickers)
             
             # --- AJOUT: Alerte Jours Fériés / Week-end ---
@@ -560,11 +565,15 @@ if df is not None:
                     )
             # ---------------------------------------------
         else:
-            market_prices, ref_prices, eur_usd_rate, history_data, asset_details, raw_history_df, daily_history_df, full_ticker_data = {}, {}, 1.0, {}, {}, pd.DataFrame(), pd.DataFrame(), {}
+            market_prices, ref_prices, exchange_rates, history_data, asset_details, raw_history_df, daily_history_df, full_ticker_data = {}, {}, {'USD': 1.0, 'GBP': 1.0, 'CHF': 1.0}, {}, {}, pd.DataFrame(), pd.DataFrame(), {}
         
-        if eur_usd_rate != 1.0:
-            st.sidebar.markdown("---")
-            st.sidebar.metric("Taux change (1€ = $)", f"{eur_usd_rate:.7f} $")
+        st.sidebar.markdown("---")
+        if exchange_rates['USD'] != 1.0:
+            st.sidebar.metric("Taux (1€ = $)", f"{exchange_rates['USD']:.4f} $")
+        if exchange_rates['GBP'] != 1.0:
+            st.sidebar.metric("Taux (1£ = €)", f"{exchange_rates['GBP']:.4f} €")
+        if exchange_rates['CHF'] != 1.0:
+            st.sidebar.metric("Taux (1 CHF = €)", f"{exchange_rates['CHF']:.4f} €")
 
         # --- ENRICHISSEMENT DU DATAFRAME AVEC LES DONNÉES DE MARCHÉ ---
         def get_row_currency(asset_name, ticker):
@@ -577,15 +586,18 @@ if df is not None:
 
         df_hold['Devise'] = df_hold.apply(lambda x: get_row_currency(x["Nom de l'actif"], x['Ticker']), axis=1)
 
-        def get_converted_price(price_dict, ticker, currency, rate):
+        def get_converted_price(price_dict, ticker, currency, rates):
             """Récupère un prix et le convertit en EUR si nécessaire."""
             raw_price = price_dict.get(ticker, 0.0)
             
             if raw_price == 0.0: return 0.0
             
-            # Conversion seulement si la devise est USD
             if currency == "USD":
-                return raw_price / rate
+                return raw_price / rates['USD']
+            elif currency == "GBP":
+                return raw_price * rates['GBP']
+            elif currency == "CHF":
+                return raw_price * rates['CHF']
             return raw_price
         
         def get_history(ticker):
@@ -729,9 +741,9 @@ if df is not None:
             devise = get_row_currency(asset_name, ticker)
 
             # Prix convertis
-            prix_actuel = get_converted_price(market_prices, ticker, devise, eur_usd_rate)
-            prix_ref = get_converted_price(ref_prices, ticker, devise, eur_usd_rate)
-            prix_30m = get_converted_price(prices_30m, ticker, devise, eur_usd_rate)
+            prix_actuel = get_converted_price(market_prices, ticker, devise, exchange_rates)
+            prix_ref = get_converted_price(ref_prices, ticker, devise, exchange_rates)
+            prix_30m = get_converted_price(prices_30m, ticker, devise, exchange_rates)
 
             # Historique & évolution
             historique = history_data.get(ticker, [])
@@ -746,27 +758,38 @@ if df is not None:
             pred_vals = get_prediction_display(ticker)
             pct_30, pct_7, bas_30, haut_30, bas_7, haut_7, evol_7d, evol_bas_7d, evol_haut_7d = pred_vals
 
-            # Conversion des fourchettes de prix en EUR si USD
-            if devise == 'USD':
-                bas_30 = bas_30 / eur_usd_rate if bas_30 is not None else None
-                haut_30 = haut_30 / eur_usd_rate if haut_30 is not None else None
-                bas_7 = bas_7 / eur_usd_rate if bas_7 is not None else None
-                haut_7 = haut_7 / eur_usd_rate if haut_7 is not None else None
+            # Conversion des fourchettes de prix en EUR
+            if devise in ['USD', 'GBP', 'CHF']:
+                def _convert_range(val):
+                    if val is None: return None
+                    if devise == 'USD': return val / exchange_rates['USD']
+                    if devise == 'GBP': return val * exchange_rates['GBP']
+                    if devise == 'CHF': return val * exchange_rates['CHF']
+                    return val
+                    
+                bas_30 = _convert_range(bas_30)
+                haut_30 = _convert_range(haut_30)
+                bas_7 = _convert_range(bas_7)
+                haut_7 = _convert_range(haut_7)
 
             # Prédictions ML & Prophet
             ml_pct_30, ml_pct_7, proph_pct_30, proph_pct_7 = get_ml_prediction_display(ticker)
 
             # Indicateurs techniques
             mm200, mme9, mme21, macd, atr, bb_haut, bb_bas, stoch_k = get_technical_indicators(ticker)
-            # Conversion EUR si USD (Stoch K est un % donc pas de conversion)
-            if devise == 'USD':
-                for v in [mm200, mme9, mme21, macd, atr, bb_haut, bb_bas]:
-                    if v is not None: v = v / eur_usd_rate
-                # Reconversion propre via division (les variables locales ne mutent pas les originaux)
-                def _eur(v): return v / eur_usd_rate if v is not None else None
+            
+            # Conversion EUR
+            if devise in ['USD', 'GBP', 'CHF']:
+                def _convert_ind(v):
+                    if v is None: return None
+                    if devise == 'USD': return v / exchange_rates['USD']
+                    if devise == 'GBP': return v * exchange_rates['GBP']
+                    if devise == 'CHF': return v * exchange_rates['CHF']
+                    return v
+                    
                 mm200, mme9, mme21, macd, atr, bb_haut, bb_bas = (
-                    _eur(mm200), _eur(mme9), _eur(mme21), _eur(macd),
-                    _eur(atr), _eur(bb_haut), _eur(bb_bas)
+                    _convert_ind(mm200), _convert_ind(mme9), _convert_ind(mme21), _convert_ind(macd),
+                    _convert_ind(atr), _convert_ind(bb_haut), _convert_ind(bb_bas)
                 )
 
             enriched_rows.append({
@@ -911,20 +934,30 @@ if df is not None:
                     if df_work.index.tz is None:
                         df_work.index = df_work.index.tz_localize('UTC')
                     df_work.index = df_work.index.tz_convert('Europe/Paris')
-                    df_work = df_work.ffill().fillna(0)
+                    df_work = df_work.ffill().bfill().fillna(0) # CORRECTION: bfill() empêche les actifs sans historique lointain de valoir 0
 
-                    rate_series = pd.Series(1.0, index=df_work.index)
-                    if "EURUSD=X" in df_work.columns:
-                        eur_data = df_work["EURUSD=X"]
-                        if isinstance(eur_data, pd.DataFrame) and 'Close' in eur_data.columns:
-                            rate_series = eur_data['Close']
-                        elif isinstance(eur_data, pd.Series):
-                            rate_series = eur_data
-                    rate_series = rate_series.replace(0, np.nan).ffill().fillna(1.0)
+                    rates_dict = {
+                        "USD": pd.Series(1.0, index=df_work.index),
+                        "GBP": pd.Series(1.0, index=df_work.index),
+                        "CHF": pd.Series(1.0, index=df_work.index)
+                    }
+                    
+                    for cur, symbol in [("USD", "EURUSD=X"), ("GBP", "GBPEUR=X"), ("CHF", "CHFEUR=X")]:
+                        if symbol in df_work.columns:
+                            cur_data = df_work[symbol]
+                            if isinstance(cur_data, pd.DataFrame) and 'Close' in cur_data.columns:
+                                rates_dict[cur] = cur_data['Close']
+                            elif isinstance(cur_data, pd.Series):
+                                rates_dict[cur] = cur_data
+                        rates_dict[cur] = rates_dict[cur].replace(0, np.nan).ffill().bfill().fillna(1.0)
 
                     port_series = pd.Series(0.0, index=df_work.index)
                     
-                    for row in df_hold.to_dict('records'):
+                    # NOUVEAU: Optimisation forte avec groupby
+                    # On regroupe par Ticker et Devise pour éviter de parser 5x le même graphique si on a 5 lignes du même ETF
+                    df_hold_grouped = df_hold.groupby(['Ticker', 'Devise'], as_index=False)['Unités'].sum()
+                    
+                    for row in df_hold_grouped.to_dict('records'):
                         t = row['Ticker']
                         if t in df_work.columns:
                             data_t = df_work[t]
@@ -932,15 +965,21 @@ if df is not None:
                             if isinstance(data_t, pd.DataFrame):
                                 if 'Close' in data_t.columns:
                                     ps = data_t['Close']
-                                elif len(data_t.columns) > 0:
-                                    ps = data_t.iloc[:, 0]
+                                else:
+                                    # Fallback si pas de colonne 'Close' mais c'est un DataFrame de shape (N, 1)
+                                    if len(data_t.columns) > 0:
+                                        ps = data_t.iloc[:, 0]
                             elif isinstance(data_t, pd.Series):
                                 ps = data_t
                                 
                             if not ps.empty:
-                                ps = ps.reindex(port_series.index, method='ffill').fillna(0)
+                                ps = ps.reindex(port_series.index, method='ffill').bfill().fillna(0) # CORRECTION: bfill() ici
                                 if row['Devise'] == 'USD':
-                                    ps = ps / rate_series
+                                    ps = ps / rates_dict['USD']
+                                elif row['Devise'] == 'GBP':
+                                    ps = ps * rates_dict['GBP']
+                                elif row['Devise'] == 'CHF':
+                                    ps = ps * rates_dict['CHF']
                                 port_series = port_series.add(ps * row['Unités'], fill_value=0)
                     return port_series
 
@@ -988,15 +1027,18 @@ if df is not None:
                 if not portfolio_last_30d.empty:
                     st.subheader(" 📈 Évolution de la valeur (30 derniers jours)")
                     
+                    # On utilise les données telles quelles pour préserver les plateaux (week-end/nuit)
+                    chart_series = portfolio_last_30d
+                    
                     # Calcul dynamique de l'échelle Y pour zoomer sur les variations
-                    y_min = portfolio_last_30d.min()
-                    y_max = portfolio_last_30d.max()
+                    y_min = chart_series.min()
+                    y_max = chart_series.max()
                     y_margin = (y_max - y_min) * 0.1 if y_max > y_min else y_max * 0.01
 
                     fig_evol = go.Figure()
                     fig_evol.add_trace(go.Scatter(
-                        x=portfolio_last_30d.index, 
-                        y=portfolio_last_30d.values,
+                        x=chart_series.index, 
+                        y=chart_series.values,
                         mode='lines',
                         fill='tozeroy',
                         line=dict(color='#3db4f2', width=3),
@@ -1016,7 +1058,7 @@ if df is not None:
                         hovermode="x unified",
                         font=dict(color='#bcbedc')
                     )
-                    st.plotly_chart(fig_evol, width='stretch')
+                    st.plotly_chart(fig_evol, width='stretch', config={'displayModeBar': False})
                     st.markdown("---")
             except Exception as e:
                 st.warning(f"Impossible d'afficher l'historique global : {e}")
@@ -1268,8 +1310,8 @@ if df is not None:
                             name='Signal Vente (MME)'
                         ), row=1, col=1)
 
-                # 3. Graphique en barres pour le volume
-                colors = ['#2ecc71' if row['Close'] >= row['Open'] else '#ff4b4b' for index, row in df_chart.iterrows()]
+                # 3. Graphique en barres pour le volume (Vectorisé pour les performances)
+                colors = np.where(df_chart['Close'] >= df_chart['Open'], '#2ecc71', '#ff4b4b')
                 fig.add_trace(go.Bar(x=df_chart.index, y=df_chart['Volume'], name='Volume', marker_color=colors), row=2, col=1)
 
                 # 4. Oscillateur Stochastique
@@ -1293,8 +1335,12 @@ if df is not None:
                     y_future = poly_func(x_future)
                     
                     last_date = df_chart.index[-1]
-                    # Génération des dates futures (Jours ouvrés)
-                    future_dates = pd.bdate_range(start=last_date + pd.Timedelta(days=1), periods=future_days)
+                    # Génération des dates futures (Adaptatif Bourse vs Crypto)
+                    has_weekends = len(df_chart[df_chart.index.dayofweek > 4]) > 0
+                    if has_weekends:
+                        future_dates = pd.date_range(start=last_date + pd.Timedelta(days=1), periods=future_days, freq='D')
+                    else:
+                        future_dates = pd.bdate_range(start=last_date + pd.Timedelta(days=1), periods=future_days)
                     
                     # Calcul de la marge d'erreur (cône d'incertitude)
                     residuals = y_hist - poly_func(x_hist)
@@ -1331,7 +1377,8 @@ if df is not None:
                 pred_price_ml, _ = calculate_ml_prediction(data_tuple, days_ahead=30)
                 
                 if pred_price_ml:
-                    target_date = df_chart.index[-1] + pd.Timedelta(days=30)
+                    # Alignement de la cible ML sur la fin du cône de prédiction (gère les Jours Ouvrés vs Crypto)
+                    target_date = future_dates[-1] if 'future_dates' in locals() else df_chart.index[-1] + pd.Timedelta(days=30)
                     fig.add_trace(go.Scatter(
                         x=[target_date], y=[pred_price_ml], mode='markers',
                         marker=dict(symbol='star', size=14, color='#f1c40f', line=dict(width=1, color='black')),
@@ -1481,7 +1528,7 @@ if df is not None:
                         font=dict(color='#bcbedc'),
                         title_font=dict(size=16, color='#edf1f5')
                     )
-                    st.plotly_chart(fig_corr, width='stretch')
+                    st.plotly_chart(fig_corr, width='stretch', config={'displayModeBar': False})
                 
                 with col_risk2:
                     st.markdown("#### ⚡ Volatilité (Risque)")
@@ -1504,7 +1551,7 @@ if df is not None:
                         font=dict(color='#bcbedc'),
                         xaxis=dict(gridcolor='rgba(128,128,128,0.2)')
                     )
-                    st.plotly_chart(fig_vol, width='stretch')
+                    st.plotly_chart(fig_vol, width='stretch', config={'displayModeBar': False})
                 
                 st.markdown("---")
                 st.markdown("#### 📉 Évolution de la Volatilité")
