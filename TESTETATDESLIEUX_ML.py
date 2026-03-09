@@ -71,6 +71,7 @@ def add_technical_indicators(df):
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
     df['MACD'] = ema12 - ema26
+    df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
     
     # ATR
     if 'High' in df.columns and 'Low' in df.columns:
@@ -83,6 +84,7 @@ def add_technical_indicators(df):
             (low - prev_close).abs()
         ], axis=1).max(axis=1)
         df['ATR'] = tr.rolling(window=14).mean()
+        df['Highest_50'] = df['High'].rolling(window=50).max()
         
         # AJOUT: Stochastic Oscillator (14)
         low_min = df['Low'].rolling(window=14).min()
@@ -92,6 +94,7 @@ def add_technical_indicators(df):
         df['Stoch_K'] = np.where(denom == 0, 50, 100 * ((close - low_min) / denom))
     else:
         df['ATR'] = np.nan
+        df['Highest_50'] = np.nan
         df['Stoch_K'] = np.nan
         
     # AJOUT: Bandes de Bollinger (20, 2)
@@ -99,6 +102,9 @@ def add_technical_indicators(df):
     std20 = close.rolling(window=20).std()
     df['BB_Upper'] = sma20 + (std20 * 2)
     df['BB_Lower'] = sma20 - (std20 * 2)
+    
+    if 'Volume' in df.columns:
+        df['Vol_SMA_20'] = df['Volume'].rolling(window=20).mean()
         
     return df
 
@@ -675,7 +681,7 @@ if df is not None:
             df_t = full_ticker_data.get(ticker, pd.DataFrame())
             required_cols = ['Close', 'High', 'Low', 'Volume']
             if df_t is None or df_t.empty or not all(c in df_t.columns for c in required_cols):
-                return (None, None, None, None, None, None)
+                return (None, None, None, None)
             
             # Création d'un tuple hashable pour la mise en cache
             # IMPORT: index=True est critique ici car Prophet et le nouveau XGBoost ont besoin des dates (l'index de df_t).
@@ -696,25 +702,16 @@ if df is not None:
             df_t = full_ticker_data.get(ticker, pd.DataFrame())
             
             # --- FIX ROBUSTESSE CACHE ---
-            # Si les nouvelles colonnes (BB, Stoch) sont absentes à cause d'un cache obsolète, on recalcule.
-            if df_t is not None and not df_t.empty and ('BB_Upper' not in df_t.columns or 'Stoch_K' not in df_t.columns):
+            # Si les nouvelles colonnes sont absentes à cause d'un cache obsolète, on recalcule.
+            required_techs = ['BB_Upper', 'Stoch_K', 'MACD_Signal', 'Highest_50']
+            if df_t is not None and not df_t.empty and not all(c in df_t.columns for c in required_techs):
                 df_t = add_technical_indicators(df_t)
                 full_ticker_data[ticker] = df_t
             
             if df_t is None or df_t.empty or 'MM_200' not in df_t.columns:
-                return (None, None, None, None, None, None, None, None)
+                return {}
             
-            last_row = df_t.iloc[-1]
-            return (
-                last_row.get('MM_200'),
-                last_row.get('MME_9'),
-                last_row.get('MME_21'),
-                last_row.get('MACD'),
-                last_row.get('ATR'),
-                last_row.get('BB_Upper'),
-                last_row.get('BB_Lower'),
-                last_row.get('Stoch_K')
-            )
+            return df_t.iloc[-1].to_dict()
 
         # --- CALCUL PRIX 30 MIN ---
         def get_price_30m_ago(ticker):
@@ -776,20 +773,34 @@ if df is not None:
             ml_pct_30, ml_pct_7, proph_pct_30, proph_pct_7 = get_ml_prediction_display(ticker)
 
             # Indicateurs techniques
-            mm200, mme9, mme21, macd, atr, bb_haut, bb_bas, stoch_k = get_technical_indicators(ticker)
+            techs = get_technical_indicators(ticker)
+            mm200 = techs.get('MM_200')
+            mme9 = techs.get('MME_9')
+            mme21 = techs.get('MME_21')
+            macd = techs.get('MACD')
+            macd_signal = techs.get('MACD_Signal')
+            atr = techs.get('ATR')
+            highest_50 = techs.get('Highest_50')
+            bb_haut = techs.get('BB_Upper')
+            bb_bas = techs.get('BB_Lower')
+            stoch_k = techs.get('Stoch_K')
+            vol = techs.get('Volume')
+            vol_sma_20 = techs.get('Vol_SMA_20')
             
             # Conversion EUR
             if devise in ['USD', 'GBP', 'CHF']:
                 def _convert_ind(v):
-                    if v is None: return None
+                    if pd.isna(v) or v is None: return None
                     if devise == 'USD': return v / exchange_rates['USD']
                     if devise == 'GBP': return v * exchange_rates['GBP']
                     if devise == 'CHF': return v * exchange_rates['CHF']
                     return v
                     
-                mm200, mme9, mme21, macd, atr, bb_haut, bb_bas = (
-                    _convert_ind(mm200), _convert_ind(mme9), _convert_ind(mme21), _convert_ind(macd),
-                    _convert_ind(atr), _convert_ind(bb_haut), _convert_ind(bb_bas)
+                mm200, mme9, mme21, macd, macd_signal, atr, highest_50, bb_haut, bb_bas = (
+                    _convert_ind(mm200), _convert_ind(mme9), _convert_ind(mme21), 
+                    _convert_ind(macd), _convert_ind(macd_signal),
+                    _convert_ind(atr), _convert_ind(highest_50), 
+                    _convert_ind(bb_haut), _convert_ind(bb_bas)
                 )
 
             enriched_rows.append({
@@ -819,10 +830,14 @@ if df is not None:
                 'MME 9': mme9,
                 'MME 21': mme21,
                 'MACD': macd,
+                'MACD Signal': macd_signal,
                 'ATR': atr,
+                'Highest 50': highest_50,
                 'BB Haut': bb_haut,
                 'BB Bas': bb_bas,
                 'Stoch K': stoch_k,
+                'Volume': vol,
+                'Vol SMA 20': vol_sma_20,
             })
 
         df_enriched = pd.DataFrame(enriched_rows, index=df_hold.index)
@@ -833,18 +848,26 @@ if df is not None:
         df_hold = pd.concat([df_hold, df_enriched], axis=1)
 
         # Conversion explicite en numérique pour gérer les None (qui deviennent NaN)
-        cols_tech = ['MM 200', 'MME 9', 'MME 21', 'MACD', 'ATR', 'BB Haut', 'BB Bas', 'Stoch K']
+        cols_tech = ['MM 200', 'MME 9', 'MME 21', 'MACD', 'MACD Signal', 'ATR', 'Highest 50', 'BB Haut', 'BB Bas', 'Stoch K', 'Volume', 'Vol SMA 20']
         for col in cols_tech:
             df_hold[col] = pd.to_numeric(df_hold[col], errors='coerce')
         
         # Calcul du Signal Technique (vectorisé)
+        # On définit des conditions plus prioritaires d'abord
         conditions = [
+            (df_hold['Prix Actuel'] < df_hold['Highest 50'] - 2.5 * df_hold['ATR']), # Stop ATR Touché
+            ((df_hold['Prix Actuel'] - df_hold['MM 200']) / df_hold['MM 200'] > 0.35), # Elastique MM200
+            ((df_hold['Volume'] > 3 * df_hold['Vol SMA 20']) & (df_hold['Prix Actuel'] > df_hold['MME 21'])), # Climax d'Achat
+            ((df_hold['MACD'] > 0) & (df_hold['MACD Signal'] > 0) & (df_hold['MACD'] < df_hold['MACD Signal'])), # MACD Baissier
             (df_hold['Prix Actuel'] < df_hold['BB Bas']), # Prix sous la bande basse -> Rebond possible
             (df_hold['Prix Actuel'] > df_hold['BB Haut']), # Prix sur la bande haute -> Correction possible
             (df_hold['MME 9'] > df_hold['MME 21']),
             (df_hold['MME 9'] < df_hold['MME 21'])
         ]
-        choices = ["Sursell (BB) 🟢", "Surchauffe (BB) 🔴", "Achat (MME) 🟢", "Vente (MME) 🔴"]
+        choices = [
+            "Stop ATR 🔴", "Surchauffe MM200 🔴", "Climax Achat ⚠️", "MACD Baisse 🔴",
+            "Sursell (BB) 🟢", "Surchauffe (BB) 🔴", "Achat (MME) 🟢", "Vente (MME) 🔴"
+        ]
         df_hold['Signal Technique'] = np.select(conditions, choices, default="N/A")
         
         # Calculs de valeurs (vectorisés)
@@ -1143,7 +1166,7 @@ if df is not None:
             *   **Performance %** : Votre gain ou perte total depuis l'achat (incluant dividendes/staking, qui agissent comme un bonus fluctuant réduisant les pertes).
             
             **2. Indicateurs Techniques (La "Météo" du marché)**
-            *   **Signal** : Combine MME (Tendance) et Bollinger (Extrêmes). "Sursell" = Prix anormalement bas (Opportunité ?).
+            *   **Signal** : Affiche les alertes critiques en priorité (Stop ATR 🔴, Surchauffe MM200 🔴, Climax Achat ⚠️, MACD 🔴), puis se rabat sur MME 9/21 et Bollinger.
             *   **ATR (Volatilité)** : Indique la nervosité de l'actif. Un chiffre élevé = gros mouvements de prix (risque plus élevé).
             *   **MACD** : Indicateur d'élan. Positif = Poussée haussière. Négatif = Poussée baissière.
             *   **MM 200** : La "Juge de Paix". Si le prix est au-dessus, la tendance de fond (long terme) est saine.
@@ -1175,13 +1198,13 @@ if df is not None:
                 "Evol. Hebdo %": st.column_config.NumberColumn("Evol. Hebdo", format="%+.2f %%", help="Variation sur 7 jours (5 jours de bourse)"),
                 "Trend 7j": st.column_config.LineChartColumn("Trend 7j", width="small", help="Tendance des 7 derniers jours"),
                 "Performance %": st.column_config.NumberColumn("Perf %", format="%+.2f %%"),
-                "Signal Technique": st.column_config.TextColumn("Signal", help="MME 9/21 ou Bandes Bollinger"),
-                "MM 200": st.column_config.NumberColumn("MM 200", format="%.2f €", help="Moyenne Mobile Simple 200j"),
-                "BB Haut": st.column_config.NumberColumn("BB Haut", format="%.2f €", help="Bande de Bollinger Haute (20, 2)"),
-                "BB Bas": st.column_config.NumberColumn("BB Bas", format="%.2f €", help="Bande de Bollinger Basse (20, 2)"),
-                "Stoch K": st.column_config.NumberColumn("Stoch %K", format="%.0f", help="Oscillateur Stochastique (14, 3)"),
-                "MACD": st.column_config.NumberColumn("MACD", format="%.2f", help="MACD (12, 26)"),
-                "ATR": st.column_config.NumberColumn("ATR (14)", format="%.2f €", help="Average True Range (Volatilité)"),
+                "Signal Technique": st.column_config.TextColumn("Signal", help="Alerte critique (ATR/MM200/Volume/MACD), MME ou Bollinger"),
+                "MM 200": st.column_config.NumberColumn("[1] MM 200", format="%.2f €", help="Moyenne Mobile Simple 200j"),
+                "ATR": st.column_config.NumberColumn("[1] ATR (14)", format="%.2f €", help="Average True Range (Volatilité)"),
+                "MACD": st.column_config.NumberColumn("[2] MACD", format="%.2f", help="MACD (12, 26)"),
+                "BB Haut": st.column_config.NumberColumn("[2] BB Haut", format="%.2f €", help="Bande de Bollinger Haute (20, 2)"),
+                "BB Bas": st.column_config.NumberColumn("[2] BB Bas", format="%.2f €", help="Bande de Bollinger Basse (20, 2)"),
+                "Stoch K": st.column_config.NumberColumn("[3] Stoch %K", format="%.0f", help="Oscillateur Stochastique (14, 3)"),
                 "Proj. 7j (%)": st.column_config.NumberColumn("7j 📐 Poly %", format="%+.2f %%", help="Projection Polynomiale (mathématique simple) sur 7 jours"),
                 "Proj. 7j (ML)": st.column_config.NumberColumn("7j 🤖 XGBoost %", format="%+.2f %%", help="Projection XGBoost (Machine Learning technique) sur 7 jours"),
                 "Proj. 7j (Prophet)": st.column_config.NumberColumn("7j 🔮 Prophet %", format="%+.2f %%", help="Projection Prophet (Saisonnalité & Historique) sur 7 jours"),
@@ -1224,7 +1247,11 @@ if df is not None:
             
             if df_full is not None and not df_full.empty and all(c in df_full.columns for c in ['Open', 'High', 'Low', 'Close', 'Volume']):
                 # On prend les 6 derniers mois pour la lisibilité
-                df_chart = df_full.last("6ME")
+                if not df_full.index.empty:
+                    six_months_ago = df_full.index[-1] - pd.DateOffset(months=6)
+                    df_chart = df_full.loc[six_months_ago:].copy()
+                else:
+                    df_chart = df_full.copy()
 
                 # Création de la figure avec subplots (prix + volume + stochastique)
                 fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
@@ -1457,6 +1484,32 @@ if df is not None:
                          analysis_points.append("🚀 **Signal Achat** : Croisement haussier des moyennes mobiles (MME 9 > MME 21) détecté récemment.")
                      elif (recent_crossovers == -1.0).any():
                          analysis_points.append("🔻 **Signal Vente** : Croisement baissier des moyennes mobiles (MME 9 < MME 21) détecté récemment.")
+                
+                # 6b. Signaux d'épuisement et de sécurité (MACD, ATR, Volume)
+                if 'MACD' in df_chart.columns and 'MACD_Signal' in df_chart.columns:
+                    macd = last_row.get('MACD')
+                    macd_sig = last_row.get('MACD_Signal')
+                    if pd.notnull(macd) and pd.notnull(macd_sig) and macd > 0 and macd_sig > 0 and macd < macd_sig:
+                        analysis_points.append("⚠️ **Essoufflement** : Croisement baissier du MACD détecté en zone positive.")
+                
+                if 'Highest_50' in df_chart.columns and 'ATR' in df_chart.columns:
+                    h50 = last_row.get('Highest_50')
+                    atr = last_row.get('ATR')
+                    if pd.notnull(h50) and pd.notnull(atr) and close_p < h50 - 2.5 * atr:
+                        analysis_points.append("🛑 **Alerte Sécurité** : Le prix a cassé son seuil d'invalidation (Stop ATR). Tendance haussière rompue.")
+                
+                if 'Volume' in df_chart.columns and 'Vol_SMA_20' in df_chart.columns and 'MME_21' in df_chart.columns:
+                    vol = last_row.get('Volume')
+                    vol_sma = last_row.get('Vol_SMA_20')
+                    mme21 = last_row.get('MME_21')
+                    if pd.notnull(vol) and pd.notnull(vol_sma) and vol_sma > 0 and pd.notnull(mme21) and close_p > mme21:
+                        if vol > 3 * vol_sma:
+                            analysis_points.append(f"💣 **Climax** : Volume disproportionné détecté (x{vol/vol_sma:.1f}). Possible fin de cycle acheteur imminent.")
+                            
+                if pd.notnull(last_row.get('MM_200')) and last_row.get('MM_200') > 0:
+                    dist_mm200 = (close_p - last_row['MM_200']) / last_row['MM_200']
+                    if dist_mm200 > 0.35:
+                        analysis_points.append(f"🔥 **Surchauffe Extrême** : Le prix est en lévitation à **+{dist_mm200*100:.0f}%** de sa MM200 historique. Chute probable à court terme.")
 
                 # 7. Prédiction IA
                 if pred_price_ml:
@@ -1638,6 +1691,13 @@ if df is not None:
                 mme9 = row.get('MME 9')
                 mme21 = row.get('MME 21')
                 macd = row.get('MACD')
+                macd_signal = row.get('MACD Signal')
+                atr = row.get('ATR')
+                highest_50 = row.get('Highest 50')
+                bb_haut = row.get('BB Haut')
+                stoch_k = row.get('Stoch K')
+                vol = row.get('Volume')
+                vol_sma_20 = row.get('Vol SMA 20')
                 
                 # Nettoyage valeurs
                 ml_30 = ml_30 if isinstance(ml_30, (int, float)) else 0.0
@@ -1657,6 +1717,9 @@ if df is not None:
                     
                     if offset == 0:
                         h_mme9, h_mme21, h_mm200, h_macd, h_price, h_rsi = mme9, mme21, mm200, macd, price, rsi_val
+                        h_bb_haut, h_stoch_k = bb_haut, stoch_k
+                        h_macd_sig, h_atr, h_highest_50 = macd_signal, atr, highest_50
+                        h_vol, h_vol_sma_20 = vol, vol_sma_20
                     else:
                         if ticker not in full_ticker_data or full_ticker_data[ticker].empty or len(full_ticker_data[ticker]) <= offset:
                             return 0, "Neutre", ["Données insuffisantes"]
@@ -1667,6 +1730,13 @@ if df is not None:
                         h_mm200 = h_data.get('MM_200')
                         h_macd = h_data.get('MACD')
                         h_rsi = h_data.get('RSI', 50)
+                        h_bb_haut = h_data.get('BB_Upper')
+                        h_stoch_k = h_data.get('Stoch_K')
+                        h_macd_sig = h_data.get('MACD_Signal')
+                        h_atr = h_data.get('ATR')
+                        h_highest_50 = h_data.get('Highest_50')
+                        h_vol = h_data.get('Volume')
+                        h_vol_sma_20 = h_data.get('Vol_SMA_20')
 
                     # 1. Analystes
                     if "Achat" in avis or "Buy" in avis: 
@@ -1708,25 +1778,65 @@ if df is not None:
                         h_score -= 0.5
                         h_reason.append(f"Trend: 📉 {poly_30:+.1f}%")
                     
-                    if pd.notnull(h_macd):
-                        if h_macd > 0: h_score += 0.5
-                        else: h_score -= 0.5
+                    if pd.notnull(h_macd) and pd.notnull(h_macd_sig):
+                        if h_macd > 0 and h_macd_sig > 0 and h_macd < h_macd_sig: 
+                            h_score -= 1
+                            h_reason.append("MACD: Croisement Baissier 🔴")
+                        elif h_macd > 0: 
+                            h_score += 0.5
+                        else: 
+                            h_score -= 0.5
                     
                     if pd.notnull(h_rsi):
                         if h_rsi < 30:
                             h_score += 1
                             h_reason.append(f"RSI: Survendu ({h_rsi:.0f})")
                         elif h_rsi > 70:
-                            h_score -= 1
+                            h_score -= 1.5
                             h_reason.append(f"RSI: Surchauffé ({h_rsi:.0f})")
+                            
+                    if pd.notnull(h_bb_haut) and pd.notnull(h_price):
+                        if h_price > h_bb_haut * 0.98:
+                            h_score -= 1.5
+                            h_reason.append("Excès: Touche BB Haut")
                     
-                    # 4. Contexte (Buy the dip / Take profit)
+                    if pd.notnull(h_stoch_k):
+                        if h_stoch_k > 80:
+                            h_score -= 1
+                            h_reason.append(f"Stoch: Surchauffe ({h_stoch_k:.0f})")
+                        elif h_stoch_k < 20:
+                            h_score += 1
+                            h_reason.append(f"Stoch: Survendu ({h_stoch_k:.0f})")
+                            
+                    if pd.notnull(h_highest_50) and pd.notnull(h_atr) and pd.notnull(h_price):
+                        if h_price < h_highest_50 - 2.5 * h_atr:
+                            h_score -= 1.5
+                            h_reason.append("Stop ATR: Rupture tendance 🔴")
+                            
+                    if pd.notnull(h_vol) and pd.notnull(h_vol_sma_20) and h_vol_sma_20 > 0:
+                        if h_vol > 3 * h_vol_sma_20 and pd.notnull(h_mme21) and h_price > h_mme21:
+                            h_score -= 1
+                            h_reason.append(f"Volume: Climax achat (x{h_vol/h_vol_sma_20:.1f}) ⚠️")
+                            
+                    if pd.notnull(h_mm200) and h_mm200 > 0 and pd.notnull(h_price):
+                        dist_mm200 = (h_price - h_mm200) / h_mm200
+                        if dist_mm200 > 0.35:
+                            h_score -= 1.5
+                            h_reason.append(f"Élastique tendu: +{dist_mm200*100:.0f}% MM200 ⚠️")
+                    
+                    # 4. Contexte (Buy the dip / Take profit dynamique)
                     if perf < -10.0 and h_score > 0: 
                         h_score += 1
                         h_reason.append(f"Rebond sur chute ({perf:.1f}%)")
-                    if perf > 15.0 and h_score < 0:
-                        h_score -= 1
-                        h_reason.append(f"Prise de profit (+{perf:.1f}%)")
+                    
+                    is_overheated = (pd.notnull(h_rsi) and h_rsi > 65) or (pd.notnull(h_stoch_k) and h_stoch_k > 80) or (pd.notnull(h_price) and pd.notnull(h_bb_haut) and h_price > h_bb_haut * 0.98)
+                    if perf > 15.0:
+                        if h_score < 0 and is_overheated:
+                            h_score -= 1.5
+                            h_reason.append(f"Prise de profit stratégique (+{perf:.1f}%)")
+                        elif is_overheated:
+                            h_score -= 1
+                            h_reason.append(f"Alerte marché tendu (+{perf:.1f}%)")
 
                     h_action = "Neutre"
                     if h_score >= 4: h_action = "Achat Fort 🟢"
