@@ -379,7 +379,7 @@ def process_portfolio_data(df, saved_tickers=None):
         return None
     try:
         # Conversion des colonnes monétaires et de dates dans les bons formats.
-        money_cols = ["Valeur d'une unité", "Total de l'actif", "Frais", "Gain de staking", "Dividende", "Prix de vente", "Unités"]
+        money_cols = ["Valeur d'une unité", "Total de l'actif", "Frais", "Gain de staking", "Dividende", "Intérêts", "Prix de vente", "Unités"]
         for col in money_cols:
             if col in df.columns:
                 df[col] = clean_currency_series(df[col])
@@ -882,15 +882,19 @@ if df is not None:
             0.0
         )
         
-        # Intégration du Staking et des Dividendes dans la performance (P&L)
+        # Séparation de la Plus-value Latente et des Gains Annexes
         staking_col = df_hold['Gain de staking'].fillna(0) if 'Gain de staking' in df_hold.columns else 0
         div_col = df_hold['Dividende'].fillna(0) if 'Dividende' in df_hold.columns else 0
-        df_hold['Plus-value Latente'] = df_hold['Valeur Actuelle'] - df_hold["Total de l'actif"] + staking_col + div_col
+        int_col = df_hold['Intérêts'].fillna(0) if 'Intérêts' in df_hold.columns else 0
+        
+        df_hold['Gains Annexes'] = staking_col + div_col + int_col
+        df_hold['Plus-value Latente'] = df_hold['Valeur Actuelle'] - df_hold["Total de l'actif"]
+        df_hold['P&L Total'] = df_hold['Plus-value Latente'] + df_hold['Gains Annexes']
         
         # Calcul de la performance (vectorisé)
         df_hold['Performance %'] = np.where(
             df_hold["Total de l'actif"] > 0,
-            (df_hold['Plus-value Latente'] / df_hold["Total de l'actif"]) * 100,
+            (df_hold['P&L Total'] / df_hold["Total de l'actif"]) * 100,
             0
         )
 
@@ -903,11 +907,12 @@ if df is not None:
         total_invested = df_hold["Total de l'actif"].sum()
         current_value_total = df_hold["Valeur Actuelle"].sum()
         
-        # Calcul de la performance globale incluant Staking et Dividendes des actifs détenus
+        # Calcul de la performance globale incluant Staking, Dividendes et Intérêts des actifs détenus
         total_staking_hold = df_hold["Gain de staking"].sum() if "Gain de staking" in df_hold.columns else 0
         total_div_hold = df_hold["Dividende"].sum() if "Dividende" in df_hold.columns else 0
-        # On utilise la somme de la colonne calculée précédemment
-        total_pnl_hold = df_hold["Plus-value Latente"].sum()
+        total_int_hold = df_hold["Intérêts"].sum() if "Intérêts" in df_hold.columns else 0
+        # On utilise la somme de la colonne globale
+        total_pnl_hold = df_hold["P&L Total"].sum()
 
         # Calcul de la variation journalière (depuis la clôture de la veille).
         reference_value_total = df_hold["Valeur Reference"].sum()
@@ -919,11 +924,12 @@ if df is not None:
         change_30m_value = current_value_total - value_30m_total
         change_30m_percent = (change_30m_value / value_30m_total * 100) if value_30m_total > 0 else 0.0
         
-        # Calcul des gains réalisés (plus-values de vente + dividendes + staking).
+        # Calcul des gains réalisés (plus-values de vente + dividendes + staking + intérêts).
         capital_gains = df_sold["Prix de vente"].sum() - df_sold["Total de l'actif"].sum() if not df_sold.empty else 0 # Gains sur ventes
         dividends = df["Dividende"].sum() if "Dividende" in df.columns else 0
         staking = df["Gain de staking"].sum() if "Gain de staking" in df.columns else 0
-        realized_gains = capital_gains + dividends + staking
+        interests = df["Intérêts"].sum() if "Intérêts" in df.columns else 0
+        realized_gains = capital_gains + dividends + staking + interests
 
         st.caption("Synthèse globale de la performance et de la valeur de vos investissements.")
 
@@ -931,14 +937,14 @@ if df is not None:
         c1, c2, c3 = st.columns(3)
         c1.metric("💰 Total Investi", f"{total_invested:,.2f} €".replace(',', ' '), help="La somme initiale investie sur les actifs actuellement détenus.")
         c2.metric("💎 Valeur Actuelle", f"{current_value_total:,.2f} €".replace(',', ' '), delta=f"{daily_change_value:+.2f}€ ({daily_change_percent:+.3f}%)", help="Valeur en temps réel. La variation correspond à l'évolution (Gain/Perte latente) depuis la clôture de la veille.")
-        c3.metric("🚀 Performance Totale", f"{(total_pnl_hold/total_invested)*100:+.2f} %" if total_invested > 0 else "0%", delta=f"{total_pnl_hold:+.2f}€".replace(',', ' '), help=f"Inclut la Plus-value latente + Staking ({total_staking_hold:.2f}€) + Dividendes ({total_div_hold:.2f}€)")
+        c3.metric("🚀 Performance Totale", f"{(total_pnl_hold/total_invested)*100:+.2f} %" if total_invested > 0 else "0%", delta=f"{total_pnl_hold:+.2f}€".replace(',', ' '), help=f"Inclut la Plus-value latente + Staking ({total_staking_hold:.2f}€) + Dividendes ({total_div_hold:.2f}€) + Intérêts ({total_int_hold:.2f}€)")
 
         st.markdown("<br>", unsafe_allow_html=True) # Espace entre les lignes
 
         # Ligne 2 : Indicateurs secondaires court terme & gains réalisés
         c4, c5, c6 = st.columns(3)
         c4.metric("⏱️ Var. 30 min", f"{change_30m_percent:+.3f} %", delta=f"{change_30m_value:+.2f}€".replace(',', ' '), help="Évolution intragroupe sur la dernière demi-heure. Indique la dynamique très court terme.")
-        c5.metric("💸 Gains Réalisés", f"{realized_gains:,.2f} €".replace(',', ' '), help=f"Gains actés. Plus-values sur ventes: {capital_gains:.2f}€ | Dividendes/Staking perçus et hors-portefeuille: {dividends+staking:.2f}€")
+        c5.metric("💸 Gains Réalisés", f"{realized_gains:,.2f} €".replace(',', ' '), help=f"Gains actés. Plus-values sur ventes: {capital_gains:.2f}€ | Dividendes/Staking/Intérêts perçus et hors-portefeuille: {dividends+staking+interests:.2f}€")
         val_gains = f"{realized_gains/total_invested*100:,.3f} %" if total_invested > 0 else "0.00 %"
         c6.metric("🏦 Ratio Gains / Investi", val_gains, help="Ratio des gains déjà sécurisés par rapport au total de vos investissements en cours.")
 
@@ -1110,21 +1116,21 @@ if df is not None:
         with col_right:
             if not df_hold.empty:
                 # Graphique en barres pour la performance de chaque actif.
-                df_chart = df_hold.sort_values(by="Plus-value Latente", ascending=True) # Tri pour afficher les plus gros gains en haut.
+                df_chart = df_hold.sort_values(by="P&L Total", ascending=True) # Tri pour afficher les plus gros gains en haut.
                 # Couleurs plus modernes (Vert Néon / Rouge Néon)
-                df_chart['Color'] = df_chart['Plus-value Latente'].apply(lambda x: '#00ff9d' if x >= 0 else '#ff0055')
-                df_chart['Perf_Pct'] = df_chart.apply(lambda x: (x['Plus-value Latente'] / x["Total de l'actif"] * 100) if x["Total de l'actif"] > 0 else 0, axis=1)
+                df_chart['Color'] = df_chart['P&L Total'].apply(lambda x: '#00ff9d' if x >= 0 else '#ff0055')
+                df_chart['Perf_Pct'] = df_chart.apply(lambda x: (x['P&L Total'] / x["Total de l'actif"] * 100) if x["Total de l'actif"] > 0 else 0, axis=1)
                 
                 # Calcul dynamique de la hauteur (40px par barre + marge) pour lisibilité sur mobile
                 dynamic_height = max(350, len(df_chart) * 40)
                 
                 fig_bar = go.Figure()
                 fig_bar.add_trace(go.Bar(
-                    y=df_chart["Nom de l'actif"], x=df_chart['Plus-value Latente'], orientation='h',
+                    y=df_chart["Nom de l'actif"], x=df_chart['P&L Total'], orientation='h',
                     marker_color=df_chart['Color'], 
-                    text=df_chart['Plus-value Latente'].apply(lambda x: f"{x:+.2f} €"), 
+                    text=df_chart['P&L Total'].apply(lambda x: f"{x:+.2f} €"), 
                     textposition='auto',
-                    hovertemplate='<b>%{y}</b><br>Gain/Perte: %{x:.2f} €<br>Performance: %{customdata:.2f}%<extra></extra>',
+                    hovertemplate='<b>%{y}</b><br>Gain/Perte Total: %{x:.2f} €<br>Performance: %{customdata:.2f}%<extra></extra>',
                     customdata=df_chart['Perf_Pct']
                 ))
                 fig_bar.update_layout(
@@ -1163,7 +1169,7 @@ if df is not None:
             st.markdown("""
             **1. Position & Performance**
             *   **Evol. Jour %** : Variation par rapport à la veille. Utile pour suivre l'humeur immédiate du marché.
-            *   **Performance %** : Votre gain ou perte total depuis l'achat (incluant dividendes/staking, qui agissent comme un bonus fluctuant réduisant les pertes).
+            *   **Performance %** : Votre gain ou perte total depuis l'achat (incluant dividendes/staking/intérêts, qui agissent comme un bonus fluctuant réduisant les pertes).
             
             **2. Indicateurs Techniques (La "Météo" du marché)**
             *   **Signal** : Affiche les alertes critiques en priorité (Stop ATR 🔴, Surchauffe MM200 🔴, Climax Achat ⚠️, MACD 🔴), puis se rabat sur MME 9/21 et Bollinger.
@@ -1185,15 +1191,17 @@ if df is not None:
 
         # st.dataframe est utilisé pour un affichage interactif avec des mini-graphiques.
         st.dataframe(
-            df_details_sorted[["Nom de l'actif", "Type", "Prix Actuel", "Valeur Actuelle", "Evol. Jour %", "Evol. Hebdo %", "Trend 7j", "Performance %", "Signal Technique", "Stoch K", "ATR", "MACD", "MM 200", "BB Haut", "BB Bas", "Proj. 7j (Prophet)", "Proj. 7j (ML)", "Proj. 7j (%)", "Proj. 30j (Prophet)", "Proj. 30j (ML)", "Proj. 30j (%)", "Historique"]]
+            df_details_sorted[["Nom de l'actif", "Type", "Prix Actuel", "Valeur Actuelle", "Plus-value Latente", "Gains Annexes", "Evol. Jour %", "Evol. Hebdo %", "Trend 7j", "Performance %", "Signal Technique", "Stoch K", "ATR", "MACD", "MM 200", "BB Haut", "BB Bas", "Proj. 7j (Prophet)", "Proj. 7j (ML)", "Proj. 7j (%)", "Proj. 30j (Prophet)", "Proj. 30j (ML)", "Proj. 30j (%)", "Historique"]]
             .style
-            .map(style_trend_text, subset=['Evol. Jour %', 'Evol. Hebdo %', 'Performance %', 'MACD', 'Proj. 7j (%)', 'Proj. 30j (%)', 'Proj. 7j (ML)', 'Proj. 30j (ML)', 'Proj. 7j (Prophet)', 'Proj. 30j (Prophet)'])
+            .map(style_trend_text, subset=['Plus-value Latente', 'Gains Annexes', 'Evol. Jour %', 'Evol. Hebdo %', 'Performance %', 'MACD', 'Proj. 7j (%)', 'Proj. 30j (%)', 'Proj. 7j (ML)', 'Proj. 30j (ML)', 'Proj. 7j (Prophet)', 'Proj. 30j (Prophet)'])
             .map(style_signal_text, subset=['Signal Technique']),
             column_config={
                 "Nom de l'actif": st.column_config.TextColumn("Actif", width="medium"),
                 "Type": st.column_config.TextColumn("Type", width="small"),
                 "Prix Actuel": st.column_config.NumberColumn("Cours Actuel", format="%.2f €"),
                 "Valeur Actuelle": st.column_config.NumberColumn("Val. Actuelle", format="%.2f €"),
+                "Plus-value Latente": st.column_config.NumberColumn("Plus-value", format="%+.2f €", help="Gain ou perte sur la seule variation du prix de l'actif"),
+                "Gains Annexes": st.column_config.NumberColumn("Gains Annexes", format="%+.2f €", help="Cumul des revenus passifs (Staking, Dividendes, Intérêts)"),
                 "Evol. Jour %": st.column_config.NumberColumn("Evol. Jour", format="%+.2f %%", help="Variation par rapport à la clôture précédente"),
                 "Evol. Hebdo %": st.column_config.NumberColumn("Evol. Hebdo", format="%+.2f %%", help="Variation sur 7 jours (5 jours de bourse)"),
                 "Trend 7j": st.column_config.LineChartColumn("Trend 7j", width="small", help="Tendance des 7 derniers jours"),

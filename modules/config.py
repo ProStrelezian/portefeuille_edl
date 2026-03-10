@@ -1,12 +1,13 @@
 # modules/config.py
 
-DEFAULT_PORTFOLIO_CSV = """Nom de l'actif,Type d'actif,Valeur d'une unité,Unités,Gain de staking,Dividende,Date d'obtention,Frais,Total de l'actif,Date de vente,Prix de vente
-NEAR Protocol (NEAR-EUR),Cryptomonnaie,"2,07 €","23,158471","0,21498651",,05/09/2025 08:57,"1,99 €","48,46 €",,
-Argent (XAGUSD),CFD,"35,34 €","1,669436",,,05/09/2025 12:04,"1,00 €","59,00 €",28/11/2025 15:38,"77,31€"
-SPDR STOXX Europe 600 SRI UCITS ETF EUR Unhedged (Acc) (ZPDX),ETF,"32,67 €","1,224552",,,05/09/2025 12:18,"0,00 €","40,01 €",,
-Amundi PEA MSCI Emerging Asia ESG Leaders UCITS ETF - EUR (C/D) (18MB),ETF,"28,35 €","3,492063",,,11/09/2025 17:49,"1,00 €","99,00 €",,
-Amundi MSCI New Energy ESG Screened UCITS ETF (Dist) (LYM9),ETF,"29,09 €","5,122035",,"0,71 €",11/09/2025 17:42,"1,00 €","149,71 €",,
-Global X Uranium UCITS ETF AccumUSD (URNU),ETF,"24,73 €","8,046907",,,26/09/2025 10:04,"1,00 €","199,00 €",,
+DEFAULT_PORTFOLIO_CSV = """Nom de l'actif,Type d'actif,Valeur d'une unité,Unités,Gain de staking,Dividende,Intérêts,Date d'obtention,Frais,Total de l'actif,Date de vente,Prix de vente
+NEAR Protocol (NEAR-EUR),Cryptomonnaie,"2,07 €","23,158471","0,21498651",,,05/09/2025 08:57,"1,99 €","48,46 €",,
+Argent (XAGUSD),CFD,"35,34 €","1,669436",,,,05/09/2025 12:04,"1,00 €","59,00 €",28/11/2025 15:38,"77,31€"
+SPDR STOXX Europe 600 SRI UCITS ETF EUR Unhedged (Acc) (ZPDX),ETF,"32,67 €","1,224552",,,,05/09/2025 12:18,"0,00 €","40,01 €",,
+Amundi PEA MSCI Emerging Asia ESG Leaders UCITS ETF - EUR (C/D) (18MB),ETF,"28,35 €","3,492063",,,,11/09/2025 17:49,"1,00 €","99,00 €",,
+Amundi MSCI New Energy ESG Screened UCITS ETF (Dist) (LYM9),ETF,"29,09 €","5,122035",,"0,71 €",,11/09/2025 17:42,"1,00 €","149,71 €",,
+Global X Uranium UCITS ETF AccumUSD (URNU),ETF,"24,73 €","8,046907",,,,26/09/2025 10:04,"1,00 €","199,00 €",,
+Livret A,Livret,"1,00 €","1500,00",,,,"45,00 €",10/01/2025 10:00,"0,00 €","1500,00 €",,
 """
 
 TICKER_FIXES = {
