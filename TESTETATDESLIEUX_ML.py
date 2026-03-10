@@ -1552,8 +1552,9 @@ if df is not None:
                 st.warning(f"Données historiques complètes (OHLCV) non disponibles pour {selected_asset}.")
 
     elif app_page == "🧠 Analyse Technique & Risques":
-        st.subheader("🧠 Analyse de Risque & Corrélation")
+        st.subheader("⚖️ Analyse Avancée des Risques & Corrélations")
         st.write("") # Espace ajouté
+        
         if not daily_history_df.empty:
             # Conversion en DataFrame si Série unique
             if isinstance(daily_history_df, pd.Series):
@@ -1562,119 +1563,213 @@ if df is not None:
             # Nettoyage : On garde uniquement les tickers présents dans le portefeuille
             valid_cols = [t for t in daily_history_df.columns if t in df_hold['Ticker'].values]
             
-            if len(valid_cols) > 1:
-                # Le remplissage des données (ffill) est maintenant fait en amont dans la fonction fetch_historical_data.
+            if len(valid_cols) > 0:
                 analysis_df = daily_history_df[valid_cols].copy()
-                # Calcul des rendements quotidiens
+                
+                # --- SÉLECTEUR DE PÉRIODE ---
+                st.markdown("### ⏱️ Période d'Analyse")
+                periode_options = {"30 Jours": 30, "3 Mois": 90, "6 Mois": 180, "1 An": 365, "Max": None}
+                selected_period = st.selectbox("Sélectionnez la période pour l'analyse des risques et corrélations :", list(periode_options.keys()), index=4)
+                
+                days_to_keep = periode_options[selected_period]
+                if days_to_keep is not None:
+                    cutoff_date = analysis_df.index.max() - pd.Timedelta(days=days_to_keep)
+                    analysis_df = analysis_df[analysis_df.index >= cutoff_date]
+                
                 returns_df = analysis_df.pct_change(fill_method=None).dropna()
                 
+                # --- KPIs DE RISQUE AVANCÉS ---
+                st.markdown("---")
+                st.markdown(f"### 📊 Indicateurs de Risque et Performance ({selected_period})")
+                
+                kpi_data = []
+                for asset in valid_cols:
+                    asset_prices = analysis_df[asset].dropna()
+                    if len(asset_prices) > 1:
+                        asset_kpis = calculate_portfolio_kpis(asset_prices)
+                        asset_name = df_hold[df_hold['Ticker'] == asset]["Nom de l'actif"].iloc[0] if not df_hold[df_hold['Ticker'] == asset].empty else asset
+                        kpi_data.append({
+                            "Actif": asset_name,
+                            "Ticker": asset,
+                            "Rendement (%)": asset_kpis.get("Period Return", 0.0),
+                            "Volatilité Ann. (%)": asset_kpis.get("Volatilité", 0.0),
+                            "Ratio de Sharpe": asset_kpis.get("Sharpe", 0.0),
+                            "Ratio de Sortino": asset_kpis.get("Sortino", 0.0),
+                            "Max Drawdown (%)": asset_kpis.get("Max Drawdown", 0.0)
+                        })
+                
+                if kpi_data:
+                    df_kpi = pd.DataFrame(kpi_data).sort_values("Ratio de Sharpe", ascending=False)
+                    st.dataframe(
+                        df_kpi.style.format({
+                            "Rendement (%)": "{:+,.2f}%",
+                            "Volatilité Ann. (%)": "{:,.2f}%",
+                            "Ratio de Sharpe": "{:,.2f}",
+                            "Ratio de Sortino": "{:,.2f}",
+                            "Max Drawdown (%)": "{:,.2f}%"
+                        }).background_gradient(subset=["Ratio de Sharpe"], cmap="RdYlGn")
+                        .background_gradient(subset=["Max Drawdown (%)"], cmap="Reds_r")
+                        .background_gradient(subset=["Rendement (%)"], cmap="RdYlGn")
+                        .background_gradient(subset=["Ratio de Sortino"], cmap="RdYlGn"),
+                        width="stretch",
+                        hide_index=True
+                    )
+                
+                st.markdown("---")
+                # --- CORRÉLATION ET VOLATILITÉ ---
                 col_risk1, col_risk2 = st.columns(2)
                 
                 with col_risk1:
                     st.markdown("#### 🔥 Matrice de Corrélation")    
                     st.caption("Mesure à quel point vos actifs bougent ensemble (1 = identique, -1 = opposé).")
-                    corr_matrix = returns_df.corr()
-                    fig_corr = px.imshow(
-                        corr_matrix, 
-                        text_auto=".2f", 
-                        color_continuous_scale='RdBu_r', 
-                        zmin=-1, zmax=1,
-                        aspect="auto"
-                    )
-                    fig_corr.update_layout(
-                        margin=dict(t=30, b=0, l=0, r=0), 
-                        height=350,
-                        paper_bgcolor='rgba(0,0,0,0)',
-                        plot_bgcolor='rgba(0,0,0,0)',
-                        font=dict(color='#bcbedc'),
-                        title_font=dict(size=16, color='#edf1f5')
-                    )
-                    st.plotly_chart(fig_corr, width='stretch', config={'displayModeBar': False})
+                    
+                    if len(valid_cols) > 1 and not returns_df.empty:
+                        corr_matrix = returns_df.corr()
+                        
+                        # Filtre interactif
+                        highlight_high_corr = st.toggle("Mettre en évidence les fortes corrélations (> 0.6)", value=False)
+                        if highlight_high_corr:
+                            corr_display = corr_matrix.copy()
+                            corr_display[(abs(corr_display) < 0.6) | (corr_display >= 0.999)] = np.nan
+                            
+                            fig_corr = px.imshow(
+                                corr_display, 
+                                text_auto=".2f", 
+                                color_continuous_scale='RdBu_r', 
+                                zmin=-1, zmax=1,
+                                aspect="auto"
+                            )
+                        else:
+                            fig_corr = px.imshow(
+                                corr_matrix, 
+                                text_auto=".2f", 
+                                color_continuous_scale='RdBu_r', 
+                                zmin=-1, zmax=1,
+                                aspect="auto"
+                            )
+                            
+                        fig_corr.update_layout(
+                            margin=dict(t=10, b=0, l=0, r=0), 
+                            height=350,
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            font=dict(color='#bcbedc')
+                        )
+                        st.plotly_chart(fig_corr, width='stretch', config={'displayModeBar': False})
+                    else:
+                        st.info("Pas assez de données pour afficher la corrélation.")
                 
                 with col_risk2:
-                    st.markdown("#### ⚡ Volatilité (Risque)")
-                    st.caption("Écart-type annualisé (Plus c'est haut, plus l'actif est instable).")
-                    # Volatilité annualisée (252 jours de bourse)
-                    volatility = returns_df.std() * (252 ** 0.5) * 100
-                    vol_df = pd.DataFrame({'Actif': volatility.index, 'Volatilité (%)': volatility.values})
-                    vol_df = vol_df.sort_values('Volatilité (%)', ascending=False)
+                    st.markdown("#### ⚖️ Risque vs Rendement (Nuage de Points)")
+                    st.caption("Viser en haut à gauche (Haut rendement, Faible risque).")
                     
-                    fig_vol = px.bar(
-                        vol_df, x='Volatilité (%)', y='Actif', orientation='h',
-                        color='Volatilité (%)', color_continuous_scale='Reds'
-                    )
-                    fig_vol.update_layout(
-                        margin=dict(t=30, b=0, l=0, r=0), 
-                        height=350, 
-                        yaxis={'categoryorder':'total ascending'},
-                        paper_bgcolor='rgba(0,0,0,0)',
-                        plot_bgcolor='rgba(0,0,0,0)',
-                        font=dict(color='#bcbedc'),
-                        xaxis=dict(gridcolor='rgba(128,128,128,0.2)')
-                    )
-                    st.plotly_chart(fig_vol, width='stretch', config={'displayModeBar': False})
-                
+                    if kpi_data:
+                        fig_scatter = px.scatter(
+                            df_kpi,
+                            x="Volatilité Ann. (%)",
+                            y="Rendement (%)",
+                            text="Actif",
+                            color="Ratio de Sharpe",
+                            color_continuous_scale="RdYlGn",
+                            size_max=15
+                        )
+                        fig_scatter.update_traces(textposition='top center', marker=dict(size=12, line=dict(width=1, color='DarkSlateGrey')))
+                        
+                        # Ajout des lignes médianes
+                        median_vol = df_kpi["Volatilité Ann. (%)"].median()
+                        median_ret = df_kpi["Rendement (%)"].median()
+                        fig_scatter.add_vline(x=median_vol, line_dash="dash", line_color="rgba(255,255,255,0.3)")
+                        fig_scatter.add_hline(y=median_ret, line_dash="dash", line_color="rgba(255,255,255,0.3)")
+                        
+                        fig_scatter.update_layout(
+                            margin=dict(t=10, b=0, l=0, r=0),
+                            height=350,
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            font=dict(color='#bcbedc'),
+                            xaxis=dict(gridcolor='rgba(128,128,128,0.2)', title="Volatilité (Risque)"),
+                            yaxis=dict(gridcolor='rgba(128,128,128,0.2)', title="Rendement")
+                        )
+                        st.plotly_chart(fig_scatter, width='stretch', config={'displayModeBar': False})
+                    
                 st.markdown("---")
-                st.markdown("#### 📉 Évolution de la Volatilité")
-                st.caption("Visualisez comment le risque (écart-type annualisé) de chaque actif a évolué récemment.")
+                st.markdown("#### 📉 Évolution de la Volatilité Glissante (30j)")
+                st.caption("Visualisez comment le risque (écart-type annualisé) de chaque actif évolue au fil du temps.")
                 
-                # Ajout d'un slider pour rendre le nombre de jours configurable
-                days_to_show = st.slider("Nombre de jours à afficher dans le tableau", min_value=5, max_value=60, value=14, step=1, help="Contrôle le nombre de colonnes de dates dans le tableau de volatilité ci-dessous.")
-                
-                # Calcul de la volatilité glissante (fenêtre de 30 jours)
-                rolling_vol = returns_df.rolling(window=30).std() * (252 ** 0.5) * 100
-                rolling_vol = rolling_vol.dropna()
-                
-                if not rolling_vol.empty:
-                    # Transposition pour avoir les Actifs en lignes et Dates en colonnes, en utilisant le nombre de jours sélectionné
-                    display_vol = rolling_vol.sort_index(ascending=False).iloc[:days_to_show].T
+                if not returns_df.empty:
+                    # Calcul de la volatilité glissante (fenêtre de 30 jours)
+                    rolling_vol = returns_df.rolling(window=30).std() * (252 ** 0.5) * 100
+                    rolling_vol = rolling_vol.dropna()
                     
-                    # Tri du plus volatile au moins volatile (basé sur la date la plus récente)
-                    if not display_vol.empty and len(display_vol.columns) > 0:
-                        display_vol = display_vol.sort_values(by=display_vol.columns[0], ascending=False)
-                    
-                    # Calcul évolution hebdo (5 jours de bourse)
-                    current = rolling_vol.iloc[-1]
-                    prev = rolling_vol.iloc[-6] if len(rolling_vol) >= 6 else current
-                    diff = current - prev
-                    
-                    # --- Ajout de l'évolution du classement ---
-                    ranks_df = rolling_vol.rank(axis=1, ascending=False, method='min')
-                    current_rank = ranks_df.iloc[-1]
-                    max_date = rolling_vol.index.max()
-                    
-                    idx_7d = rolling_vol.index[rolling_vol.index <= max_date - pd.Timedelta(days=7)]
-                    rank_7d = ranks_df.loc[idx_7d[-1]] if len(idx_7d) > 0 else ranks_df.iloc[0]
-                    
-                    idx_30d = rolling_vol.index[rolling_vol.index <= max_date - pd.Timedelta(days=30)]
-                    rank_30d = ranks_df.loc[idx_30d[-1]] if len(idx_30d) > 0 else ranks_df.iloc[0]
-                    
-                    def format_rank_diff(val):
-                        if pd.isna(val): return "➖ ="
-                        if val > 0: return f"🔺 +{int(val)}"
-                        if val < 0: return f"🔻 {int(val)}"
-                        return "➖ ="
-                    
-                    display_vol.insert(0, "Evol. Hebdo (pts)", diff)
-                    display_vol.insert(0, "Evol. Place 30J", (rank_30d - current_rank).apply(format_rank_diff))
-                    display_vol.insert(0, "Evol. Place 7J", (rank_7d - current_rank).apply(format_rank_diff))
-                    
-                    # Ajout d'une place (rang) en utilisant le rang réel
-                    display_vol.insert(0, "Rang", [f"#{int(current_rank.get(idx, i+1))}" for i, idx in enumerate(display_vol.index)])
-                    
-                    # Formatage des dates en colonnes
-                    display_vol.columns = [c if isinstance(c, str) else c.strftime('%d/%m') for c in display_vol.columns]
+                    if not rolling_vol.empty:
+                        # Ajout d'un slider pour rendre le nombre de jours configurable
+                        days_to_show = st.slider("Nombre de jours à afficher dans le tableau :", min_value=5, max_value=60, value=14, step=1, help="Contrôle le nombre de colonnes de dates dans le tableau de volatilité ci-dessous.")
+                        
+                        # Transposition pour avoir les Actifs en lignes et Dates en colonnes
+                        display_vol = rolling_vol.sort_index(ascending=False).iloc[:days_to_show].T
+                        
+                        # Remplacer les Tickers par les Noms d'actifs
+                        asset_name_map = {}
+                        for ticker in display_vol.index:
+                            match = df_hold[df_hold['Ticker'] == ticker]
+                            if not match.empty:
+                                asset_name_map[ticker] = match["Nom de l'actif"].iloc[0]
+                            else:
+                                asset_name_map[ticker] = ticker
+                                
+                        display_vol.index = display_vol.index.map(asset_name_map)
+                        
+                        # Tri du plus volatile au moins volatile (basé sur la date la plus récente)
+                        if not display_vol.empty and len(display_vol.columns) > 0:
+                            display_vol = display_vol.sort_values(by=display_vol.columns[0], ascending=False)
+                        
+                        # Calcul évolution hebdo (5 jours de bourse)
+                        current = rolling_vol.iloc[-1]
+                        prev = rolling_vol.iloc[-6] if len(rolling_vol) >= 6 else current
+                        diff = current - prev
+                        
+                        # Ajustage de l'index de diff pour correspondre à display_vol
+                        diff.index = diff.index.map(asset_name_map)
+                        
+                        # --- Ajout de l'évolution du classement ---
+                        ranks_df = rolling_vol.rank(axis=1, ascending=False, method='min')
+                        ranks_df.columns = ranks_df.columns.map(asset_name_map)
+                        
+                        current_rank = ranks_df.iloc[-1]
+                        max_date = rolling_vol.index.max()
+                        
+                        idx_7d = rolling_vol.index[rolling_vol.index <= max_date - pd.Timedelta(days=7)]
+                        rank_7d = ranks_df.loc[idx_7d[-1]] if len(idx_7d) > 0 else ranks_df.iloc[0]
+                        
+                        idx_30d = rolling_vol.index[rolling_vol.index <= max_date - pd.Timedelta(days=30)]
+                        rank_30d = ranks_df.loc[idx_30d[-1]] if len(idx_30d) > 0 else ranks_df.iloc[0]
+                        
+                        def format_rank_diff(val):
+                            if pd.isna(val): return "➖ ="
+                            if val > 0: return f"🔺 +{int(val)}"
+                            if val < 0: return f"🔻 {int(val)}"
+                            return "➖ ="
+                        
+                        display_vol.insert(0, "Evol. Hebdo (pts)", diff)
+                        display_vol.insert(0, "Evol. Place 30J", (rank_30d - current_rank).apply(format_rank_diff))
+                        display_vol.insert(0, "Evol. Place 7J", (rank_7d - current_rank).apply(format_rank_diff))
+                        
+                        # Ajout d'une place (rang) en utilisant le rang réel
+                        display_vol.insert(0, "Rang", [f"#{int(current_rank.get(idx, i+1))}" for i, idx in enumerate(display_vol.index)])
+                        
+                        # Formatage des dates en colonnes
+                        display_vol.columns = [c if isinstance(c, str) else c.strftime('%d/%m') for c in display_vol.columns]
 
-                    st.dataframe(
-                        display_vol.style.format("{:.2f}%", subset=display_vol.columns[4:])
-                                         .format("{:+.2f}", subset=["Evol. Hebdo (pts)"])
-                                         .background_gradient(cmap='Reds', axis=None, subset=display_vol.columns[4:])
-                                         .map(lambda x: 'color: #ff4b4b' if x > 0 else 'color: #2ecc71', subset=["Evol. Hebdo (pts)"]),
-                        width='stretch',
-                        height=400
-                    )
+                        st.dataframe(
+                            display_vol.style.format("{:.2f}%", subset=display_vol.columns[4:])
+                                             .format("{:+.2f}", subset=["Evol. Hebdo (pts)"])
+                                             .background_gradient(cmap='Reds', axis=None, subset=display_vol.columns[4:])
+                                             .map(lambda x: 'color: #ff4b4b' if isinstance(x, (int, float)) and x > 0 else 'color: #2ecc71' if isinstance(x, (int, float)) else '', subset=["Evol. Hebdo (pts)"]),
+                            width='stretch',
+                            height=400
+                        )
             else:
-                st.info("Il faut au moins 2 actifs avec historique pour afficher la corrélation.")
+                st.info("Il faut au moins 1 actif avec historique pour afficher l'analyse.")
         else:
             st.info("Données historiques insuffisantes pour l'analyse avancée.")
 
